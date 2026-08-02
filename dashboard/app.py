@@ -6,6 +6,7 @@ Run with: streamlit run dashboard/app.py
 import pandas as pd
 import streamlit as st
 
+from src.tracking.bets import calculate_clv
 from src.tracking.db import get_engine
 
 st.set_page_config(page_title="Cheech — Bet Tracker", layout="wide")
@@ -36,8 +37,12 @@ else:
             "CLV compares the odds you took to the closing line — "
             "the better long-run indicator of real edge."
         )
-        # TODO: implement proper CLV calculation from American/decimal odds
-        st.dataframe(
-            has_clv[["date_placed", "selection", "odds_at_placement", "closing_odds"]],
-            use_container_width=True,
+        has_clv = has_clv.copy()
+        has_clv["clv"] = has_clv.apply(
+            lambda row: calculate_clv(row["odds_at_placement"], row["closing_odds"]), axis=1
         )
+        st.metric("Average CLV", f"{has_clv['clv'].mean():+.1%}")
+
+        display = has_clv[["date_placed", "selection", "odds_at_placement", "closing_odds", "clv"]].copy()
+        display["clv"] = display["clv"].map(lambda v: f"{v:+.1%}")
+        st.dataframe(display, use_container_width=True)
