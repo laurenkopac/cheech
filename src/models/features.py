@@ -110,11 +110,20 @@ def build_team_game_features(pbp: pd.DataFrame, schedules: pd.DataFrame) -> pd.D
 
     All `*_trailing` columns are season-to-date averages entering this
     game (see _trailing_average) -- never this game's own stats, so
-    they're safe to train a pre-game winner model on.
-    """
-    plays = pbp[pbp["epa"].notna() & pbp["posteam"].notna()].copy()
+    they're safe to train a pre-game winner model on. Upcoming, unplayed
+    games (no pbp rows yet) are included too, with trailing features
+    forward-filled from each team's most recent played game -- that's
+    what makes this usable for generating predictions, not just training.
 
-    def _side_stats(group_col: str, prefix: str) -> pd.DataFrame:
+    Tolerates `pbp` being completely empty (nfl_data_py returns an empty,
+    columnless DataFrame -- rather than raising -- for a season with no
+    games played yet, e.g. preseason before Week 1): in that case every
+    team-game's stats are simply unknown/NaN, same as any other team's
+    week-1 game.
+    """
+    STAT_SUFFIXES = ["epa_per_play", "success_rate", "pass_rate", "plays", "turnovers", "redzone_td_rate"]
+
+    def _side_stats(plays: pd.DataFrame, group_col: str, prefix: str) -> pd.DataFrame:
         agg = (
             plays.groupby([group_col, "game_id"])
             .agg(**{
@@ -155,10 +164,25 @@ def build_team_game_features(pbp: pd.DataFrame, schedules: pd.DataFrame) -> pd.D
             how="left",
         )
 
-    offense = _side_stats("posteam", "off")
-    defense = _side_stats("defteam", "def")
-    team_game = offense.merge(defense, on=["team", "game_id"])
-    team_game = team_game.merge(schedules[["game_id", "season", "week"]], on="game_id")
+    if pbp.empty or "epa" not in pbp.columns:
+        empty_cols = ["team", "game_id"] + [f"{p}_{s}" for p in ("off", "def") for s in STAT_SUFFIXES]
+        played_stats = pd.DataFrame(columns=empty_cols)
+    else:
+        plays = pbp[pbp["epa"].notna() & pbp["posteam"].notna()].copy()
+        offense = _side_stats(plays, "posteam", "off")
+        defense = _side_stats(plays, "defteam", "def")
+        played_stats = offense.merge(defense, on=["team", "game_id"], how="outer")
+
+    # Full team-schedule skeleton -- one row per team per game on its
+    # schedule, played or not -- then left-join in the actual per-game
+    # stats where they exist. Upcoming games get NaN for their own-game
+    # stats (correct: they haven't happened), but still get a row, so
+    # _trailing_average (which only looks at *prior* rows) can carry a
+    # team's real trailing stats forward into them.
+    home_side = schedules[["game_id", "season", "week", "home_team"]].rename(columns={"home_team": "team"})
+    away_side = schedules[["game_id", "season", "week", "away_team"]].rename(columns={"away_team": "team"})
+    team_schedule = pd.concat([home_side, away_side], ignore_index=True)
+    team_game = team_schedule.merge(played_stats, on=["team", "game_id"], how="left")
 
     value_cols = [c for c in team_game.columns if c.startswith("off_") or c.startswith("def_")]
     team_game = _trailing_average(team_game, group_cols=["team", "season"], order_col="week", value_cols=value_cols)
