@@ -89,3 +89,18 @@ CREATE TABLE IF NOT EXISTS bets (
     outcome TEXT CHECK (outcome IN ('win', 'loss', 'push') OR outcome IS NULL),
     notes TEXT
 );
+
+-- Append-only, like odds_snapshots: every generation run is a new row, not
+-- an upsert of the "latest" prediction. feature_snapshot is the exact
+-- feature vector used, so a pre-news and post-news prediction for the
+-- same game stay independently comparable (CLAUDE.md).
+CREATE TABLE IF NOT EXISTS predictions (
+    prediction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at TEXT NOT NULL,
+    market TEXT NOT NULL,
+    game_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    predicted_probability REAL NOT NULL,
+    feature_snapshot TEXT NOT NULL,
+    UNIQUE (generated_at, market, game_id, subject)
+);
