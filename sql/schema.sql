@@ -73,3 +73,19 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_odds_snapshots_event
     ON odds_snapshots (event_id, bookmaker, market, fetched_at);
+
+-- User-entered, not pulled from a source -- rows are created at bet time
+-- and mutated in place (closing_odds once the line closes, outcome once
+-- the game finishes), rather than upserted or appended.
+CREATE TABLE IF NOT EXISTS bets (
+    bet_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date_placed TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    odds_at_placement INTEGER NOT NULL,
+    closing_odds INTEGER,
+    stake REAL NOT NULL,
+    model_predicted_probability REAL,
+    outcome TEXT CHECK (outcome IN ('win', 'loss', 'push') OR outcome IS NULL),
+    notes TEXT
+);
