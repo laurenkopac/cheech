@@ -71,6 +71,27 @@ def set_outcome(engine, bet_id: int, outcome: str) -> None:
         )
 
 
+def _american_to_prob(odds: float) -> float:
+    """American odds -> implied probability (includes the bookmaker's vig)."""
+    if odds > 0:
+        return 100 / (odds + 100)
+    return -odds / (-odds + 100)
+
+
+def calculate_clv(odds_at_placement: float, closing_odds: float) -> float:
+    """
+    Closing line value, in probability points: the gap between the
+    closing line's implied probability and the odds actually taken.
+
+    Positive means the closing line implies a *higher* probability than
+    what was taken -- the bettor got a cheaper price than the market
+    ultimately settled at, i.e. beat the closing line. This is CLAUDE.md's
+    primary indicator of real long-run edge, more so than win/loss record,
+    since it's assessable immediately rather than waiting on results.
+    """
+    return _american_to_prob(closing_odds) - _american_to_prob(odds_at_placement)
+
+
 def get_bets(engine, *, open_only: bool = False) -> list[dict]:
     """All logged bets, most recent first. `open_only` filters to bets
     without a recorded outcome yet."""
