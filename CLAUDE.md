@@ -85,8 +85,8 @@ Minimal schema (Postgres or SQLite is fine for personal use):
 - Track **closing line value (CLV)** — the gap between odds taken and the
   closing line — as the primary indicator of real edge, not just win/loss
   record. CLV is more predictive of long-run skill than short-term results.
-- A lightweight dashboard (Streamlit is the fastest path) over this table
-  for reviewing what's working.
+- A lightweight dashboard (`dashboard/app.py`, Streamlit) over this table
+  for reviewing what's working, including a real CLV calculation.
 
 ## Newsletter
 
@@ -122,7 +122,12 @@ Minimal schema (Postgres or SQLite is fine for personal use):
 ## Open Decisions (revisit as the project develops)
 
 - Whether to pay for X API access for social signal, or skip it entirely.
-- Dashboard framework: Streamlit vs a small React app (React only if the
-  user wants richer interactivity than Streamlit offers easily).
-- Whether prop models are built per-market from day one or added
-  incrementally after the winner/anytime-TD models are validated.
+- **Resolved:** dashboard framework is Streamlit (`dashboard/app.py`),
+  built and in use.
+- Prop models beyond winner/anytime-TD: not started. Per the plan, the
+  winner model was built and validated first. The anytime-TD model
+  itself exists (`src/models/td_model.py`) but isn't wired into
+  `predict_dag` yet — unlike the winner model, it needs a player-level
+  projection step (current roster + each player's latest trailing stats
+  + upcoming opponent) before it can predict an upcoming game, since
+  play-by-play only covers games already played.

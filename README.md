@@ -6,6 +6,30 @@ for scope and architecture when working with Claude Code on this repo.
 
 ## Setup
 
+This repo needs Python 3.10/3.11 — `nfl_data_py` pins `pandas<2.0`, which
+has no prebuilt wheel for Python 3.12+. If your system Python is 3.12
+(e.g. current Homebrew `python3`), a plain `venv` will fail to install
+`pandas`. A conda env pinned to 3.11 is the path of least resistance if
+you don't already have an older Python available:
+
+```bash
+conda create -n cheech python=3.11 -y
+conda activate cheech
+pip install -r requirements.txt
+
+# xgboost specifically: install via conda-forge, not pip. Pip's wheel
+# needs a separate `brew install libomp` on macOS, and mixing pip/conda
+# installs of xgboost has caused corrupted, version-mismatched native
+# libraries in practice — if it ever breaks, purge both pip's and
+# conda's copies and reinstall clean from conda-forge.
+conda install -c conda-forge xgboost -y
+
+cp .env.example .env
+# fill in your API keys in .env
+```
+
+If your system Python is already 3.10/3.11, a normal venv works fine:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -48,12 +72,29 @@ symlink `dags/` into your existing Airflow install. DAGs:
 
 ## Run tests
 
-```bash
-pytest
-```
+No automated test suite yet (`pytest` is in `requirements.txt` for when
+one exists) — every module so far has instead been verified by actually
+running it against real data (live API pulls, a real SQLite DB) rather
+than mocked fixtures. See each module's `if __name__ == "__main__":`
+block for a runnable example.
 
 ## Status
 
-Scaffold stage — ingestion, modeling, and newsletter modules have working
-API calls but ingestion-to-database persistence and feature engineering are
-marked `TODO`. See `CLAUDE.md` → "Open Decisions" for what's still unsettled.
+Ingestion (stats/news/odds), the bet ledger, feature engineering, and
+winner-model prediction are built, wired into their Airflow DAGs, and
+verified end-to-end against real data. The Streamlit dashboard shows
+real bets with a working closing-line-value (CLV) calculation. The
+newsletter's content queries (recent news + top model edges) are wired
+to the real DB; the actual LLM summarization and email send exist in
+code but haven't been exercised for real yet, pending `ANTHROPIC_API_KEY`
+/ `SENDGRID_API_KEY`.
+
+Not yet built: anytime-TD prediction isn't wired into `generate_predictions`
+— `build_player_td_features` only has rows for games that have already
+been played, and projecting a player's stats onto an upcoming game needs
+a real design pass (see `src/models/train.py`'s module docstring). Prop
+markets beyond winner/anytime-TD haven't been started.
+
+See `sql/schema.sql` for the current schema (schedules, injuries,
+snap_counts, news_items, odds_snapshots, bets, predictions) and
+`CLAUDE.md` → "Open Decisions" for what's still unsettled.
