@@ -6,13 +6,16 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.news import fetch_rss_items, fetch_newsapi_items
+from src.ingestion.news import fetch_rss_items, fetch_newsapi_items, persist_news_items
+from src.tracking.db import get_engine, init_db
 
 
 def run_news_ingestion():
+    engine = get_engine()
+    init_db(engine)
     items = fetch_rss_items() + fetch_newsapi_items()
-    print(f"Fetched {len(items)} news items")
-    # TODO: persist to news_items table, dedupe by URL
+    n = persist_news_items(engine, items)
+    print(f"Upserted {n} news items ({len(items)} fetched)")
 
 
 with DAG(

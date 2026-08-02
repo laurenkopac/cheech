@@ -8,27 +8,29 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.stats import get_schedules, get_injuries, get_snap_counts
+from src.ingestion.stats import persist_schedules, persist_injuries, persist_snap_counts
+from src.tracking.db import get_engine, init_db
 
 CURRENT_SEASON = 2026
 
 
 def run_schedules():
-    df = get_schedules([CURRENT_SEASON])
-    print(f"Fetched {len(df)} schedule rows")
-    # TODO: persist to DB
+    engine = get_engine()
+    init_db(engine)
+    n = persist_schedules(engine, [CURRENT_SEASON])
+    print(f"Upserted {n} schedule rows")
 
 
 def run_injuries():
-    df = get_injuries([CURRENT_SEASON])
-    print(f"Fetched {len(df)} injury rows")
-    # TODO: persist to DB
+    engine = get_engine()
+    n = persist_injuries(engine, [CURRENT_SEASON])
+    print(f"Upserted {n} injury rows")
 
 
 def run_snap_counts():
-    df = get_snap_counts([CURRENT_SEASON])
-    print(f"Fetched {len(df)} snap count rows")
-    # TODO: persist to DB
+    engine = get_engine()
+    n = persist_snap_counts(engine, [CURRENT_SEASON])
+    print(f"Upserted {n} snap count rows")
 
 
 with DAG(

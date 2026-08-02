@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 import feedparser
 import requests
 
+from src.tracking.db import get_engine, init_db, upsert_rows
+
 FEEDS = {
     "espn_nfl": "https://www.espn.com/espn/rss/nfl/news",
     "nfl_news": "https://www.nfl.com/feeds/rss/news",
@@ -56,6 +58,20 @@ def fetch_newsapi_items(query: str = "NFL") -> list[dict]:
     ]
 
 
+def persist_news_items(engine, items: list[dict]) -> int:
+    """Upsert news items, deduped by URL.
+
+    Items without a URL can't be deduped, so they're dropped rather than
+    accumulating as duplicates on every run.
+    """
+    rows = [item for item in items if item.get("url")]
+    return upsert_rows(engine, "news_items", rows, unique_cols=["url"])
+
+
 if __name__ == "__main__":
-    for item in fetch_rss_items()[:5]:
-        print(item["source"], "-", item["title"])
+    engine = get_engine()
+    init_db(engine)
+
+    items = fetch_rss_items() + fetch_newsapi_items()
+    n = persist_news_items(engine, items)
+    print(f"Upserted {n} news items ({len(items)} fetched)")

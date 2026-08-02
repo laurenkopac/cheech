@@ -8,13 +8,16 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.odds import get_current_odds
+from src.ingestion.odds import get_current_odds, persist_odds_snapshot
+from src.tracking.db import get_engine, init_db
 
 
 def run_odds_ingestion():
+    engine = get_engine()
+    init_db(engine)
     games = get_current_odds()
-    print(f"Fetched odds for {len(games)} games")
-    # TODO: persist snapshot with timestamp for line-movement tracking
+    n = persist_odds_snapshot(engine, games)
+    print(f"Upserted {n} odds snapshot rows for {len(games)} games")
 
 
 with DAG(
