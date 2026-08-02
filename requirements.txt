@@ -1,0 +1,33 @@
+# Orchestration
+apache-airflow>=2.9
+
+# Data / stats
+nfl_data_py
+pandas
+numpy
+
+# Modeling
+scikit-learn
+xgboost
+lightgbm
+
+# Odds & news
+requests
+feedparser
+
+# Storage
+sqlalchemy
+psycopg2-binary   # remove if using SQLite only
+
+# Newsletter
+anthropic         # or openai, whichever LLM you use to summarize
+jinja2            # email templating
+
+# Dashboard
+streamlit
+
+# Env / config
+python-dotenv
+
+# Testing
+pytest
