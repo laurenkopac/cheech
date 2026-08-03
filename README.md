@@ -65,10 +65,19 @@ Point `AIRFLOW_HOME`'s `dags_folder` at this repo's `dags/` directory, or
 symlink `dags/` into your existing Airflow install. DAGs:
 
 - `ingest_stats` — daily nflverse pull
-- `ingest_news` — hourly RSS/NewsAPI pull
+- `ingest_news` — hourly RSS/NewsAPI pull; also posts high-signal
+  (injury/roster) items to Discord if `DISCORD_NEWS_WEBHOOK_URL` is set
 - `ingest_odds` — every 4 hours, for line movement tracking
-- `generate_predictions` — weekly, ahead of the slate
+- `generate_predictions` — weekly, ahead of the slate; also posts the
+  latest run's top edges to Discord if `DISCORD_PREDICTIONS_WEBHOOK_URL`
+  is set
 - `daily_newsletter` — daily digest with source citations
+
+All 5 DAGs are registered but currently **paused**, and no scheduler is
+running continuously on this machine — nothing fires on its own yet.
+Unpause with `airflow dags unpause <dag_id>` and start `airflow scheduler`
+(or `airflow standalone`) when ready for real scheduled runs; until then,
+every task has instead been run/verified manually (see Status below).
 
 ## Run tests
 
@@ -83,11 +92,23 @@ block for a runnable example.
 Ingestion (stats/news/odds), the bet ledger, feature engineering, and
 winner-model prediction are built, wired into their Airflow DAGs, and
 verified end-to-end against real data. The Streamlit dashboard shows
-real bets with a working closing-line-value (CLV) calculation. The
-newsletter's content queries (recent news + top model edges) are wired
-to the real DB; the actual LLM summarization and email send exist in
-code but haven't been exercised for real yet, pending `ANTHROPIC_API_KEY`
-/ `SENDGRID_API_KEY`.
+real bets with a working closing-line-value (CLV) calculation.
+
+The newsletter is fully wired and verified end-to-end: real news +
+model-edge queries, real LLM summarization (Anthropic), and delivery via
+Gmail SMTP. The email body is rendered from the LLM's markdown draft to
+styled HTML (`src/newsletter/send.py`), with the raw markdown kept as a
+plain-text fallback part.
+
+Discord delivery is also wired and verified end-to-end, as a
+faster-cadence complement to the daily email: `ingest_news` posts
+high-signal (injury/roster) news items as they're found, and
+`generate_predictions` posts the latest run's top edges — each to its
+own channel via a separate webhook (`src/discord/`). See CLAUDE.md →
+"Discord Delivery" for the design.
+
+**Not live yet** — see "Run Airflow" above. Everything so far has been
+verified via direct/manual invocation, not a running scheduler.
 
 Not yet built: anytime-TD prediction isn't wired into `generate_predictions`
 — `build_player_td_features` only has rows for games that have already

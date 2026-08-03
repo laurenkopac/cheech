@@ -3,7 +3,12 @@ Task logic for predict_dag.py. Imports only from src.* (never airflow) so
 it can run inside the `cheech` conda env via dags/_env.py -- see that
 file's docstring for why the split exists.
 """
+import os
+
+from src.discord.content import format_predictions_alert
+from src.discord.send import send_discord_message
 from src.models.train import build_features, persist_predictions, train_and_predict_winner
+from src.newsletter.content import get_latest_model_edges
 from src.tracking.db import get_engine, init_db
 
 CURRENT_SEASON = 2026
@@ -32,6 +37,14 @@ def run_predictions():
     init_db(engine)
     n = persist_predictions(engine, predictions, market="winner")
     print(f"Persisted {n} winner predictions")
+
+    edges = get_latest_model_edges(engine, market="winner")
+    webhook_url = os.environ.get("DISCORD_PREDICTIONS_WEBHOOK_URL")
+    if edges and webhook_url:
+        send_discord_message(format_predictions_alert(edges), webhook_url)
+        print(f"Posted {len(edges)} model edge(s) to Discord")
+    elif edges:
+        print(f"{len(edges)} model edge(s) found but DISCORD_PREDICTIONS_WEBHOOK_URL isn't set -- skipping")
 
 
 if __name__ == "__main__":

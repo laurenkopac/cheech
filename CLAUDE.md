@@ -22,6 +22,9 @@ Airflow for other pipelines):
    probabilities at time of bet, and outcomes.
 4. **Newsletter** — a daily summarized digest of news + the model's top
    edges, emailed to the user with source citations.
+5. **Discord delivery** — event-driven alerts (high-signal news, new
+   prediction edges) posted to Discord channels via incoming webhooks, as
+   a faster-cadence complement to the daily email.
 
 ## Data Sources
 
@@ -98,6 +101,29 @@ Minimal schema (Postgres or SQLite is fine for personal use):
 - Delivery: email via SMTP or a free-tier transactional email service
   (e.g., SendGrid free tier) to the user's own address.
 
+## Discord Delivery
+
+A second, faster-cadence delivery channel alongside the daily email —
+separate Discord channels/webhooks per content type rather than mixing
+markets into one feed:
+
+- **News** (`DISCORD_NEWS_WEBHOOK_URL`): posts on `ingest_news` DAG runs
+  (hourly-in-season) when a newly-seen news item matches a high-signal
+  keyword filter (injury/roster status). Not every ingested item — the
+  daily email already covers the full day's news; this channel is for
+  what shouldn't wait until morning.
+- **Predictions** (`DISCORD_PREDICTIONS_WEBHOOK_URL`): posts the latest
+  run's top model edges when `predict_dag` completes. One channel for
+  now, covering the winner model only — a separate TD channel isn't
+  worth splitting out until the anytime-TD model is actually wired into
+  `predict_dag` (see Open Decisions) and there's real content to post.
+- Webhook-only (no persistent bot) — simplest option that fits the
+  single-user, self-hosted philosophy. A bot (for on-demand queries like
+  "what's my current CLV") is a possible future upgrade, not a v1 need.
+- Missing webhook env vars degrade gracefully: the underlying DAG task
+  still completes (news ingestion / prediction persistence aren't
+  gated on Discord delivery succeeding), just skips the post.
+
 ## Engineering Conventions
 
 - **Orchestration**: Airflow DAGs, one per subsystem where practical
@@ -131,3 +157,11 @@ Minimal schema (Postgres or SQLite is fine for personal use):
   projection step (current roster + each player's latest trailing stats
   + upcoming opponent) before it can predict an upcoming game, since
   play-by-play only covers games already played.
+- **Not live yet:** all 5 DAGs are registered but paused, and no
+  Airflow scheduler runs continuously on the user's machine — everything
+  built so far (newsletter, Discord delivery) has been verified via
+  direct/manual invocation, not a real scheduled run. Revisit once the
+  user wants this fully autonomous.
+- **Next up:** broadening news sources beyond the current ESPN/NFL.com
+  RSS feeds (e.g. beat writers), and iterating on newsletter and Discord
+  message formatting/content.
