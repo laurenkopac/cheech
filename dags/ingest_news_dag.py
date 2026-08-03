@@ -1,21 +1,26 @@
 """
 Hourly-in-season news ingestion from RSS + NewsAPI.
+
+Task logic lives in dags/tasks/ingest_news.py and runs inside the `cheech`
+conda env (see dags/_env.py) -- this file only holds Airflow's own DAG
+definition, since Airflow runs in its own isolated env.
 """
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.news import fetch_rss_items, fetch_newsapi_items, persist_news_items
-from src.tracking.db import get_engine, init_db
+# Airflow's DAG bundle loader doesn't put the repo root on sys.path, so
+# `dags._env` isn't importable as a package -- import _env directly
+# relative to this file instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import run_in_cheech_env
 
 
 def run_news_ingestion():
-    engine = get_engine()
-    init_db(engine)
-    items = fetch_rss_items() + fetch_newsapi_items()
-    n = persist_news_items(engine, items)
-    print(f"Upserted {n} news items ({len(items)} fetched)")
+    run_in_cheech_env("ingest_news", "run_news_ingestion")
 
 
 with DAG(

@@ -1,29 +1,27 @@
 """
 Daily newsletter: pulls the day's news + top model edges, summarizes with
 citations, and emails it to the user.
+
+Task logic lives in dags/tasks/newsletter.py and runs inside the `cheech`
+conda env (see dags/_env.py) -- this file only holds Airflow's own DAG
+definition, since Airflow runs in its own isolated env.
 """
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.newsletter.content import get_latest_model_edges, get_recent_news_items
-from src.newsletter.summarize import draft_newsletter
-from src.newsletter.send import send_newsletter
-from src.tracking.db import get_engine
+# Airflow's DAG bundle loader doesn't put the repo root on sys.path, so
+# `dags._env` isn't importable as a package -- import _env directly
+# relative to this file instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import run_in_cheech_env
 
 
 def run_newsletter():
-    engine = get_engine()
-    news_items = get_recent_news_items(engine)
-    model_edges = get_latest_model_edges(engine)
-
-    if not news_items and not model_edges:
-        print("No content available yet — skipping send until ingestion is wired up.")
-        return
-
-    body = draft_newsletter(news_items, model_edges)
-    send_newsletter(subject="Your Daily Cheech Digest", body_text=body)
+    run_in_cheech_env("newsletter", "run_newsletter")
 
 
 with DAG(

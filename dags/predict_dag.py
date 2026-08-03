@@ -9,41 +9,31 @@ doesn't provide -- it's driven entirely by play-by-play, so it only has
 rows for games that have already been played. See src/models/train.py's
 module docstring for the full explanation; that's a real design task of
 its own, not a small addition here.
+
+Task logic lives in dags/tasks/predict.py and runs inside the `cheech`
+conda env (see dags/_env.py) -- this file only holds Airflow's own DAG
+definition, since Airflow runs in its own isolated env.
 """
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.models.train import build_features, persist_predictions, train_and_predict_winner
-from src.tracking.db import get_engine, init_db
-
-CURRENT_SEASON = 2026
+# Airflow's DAG bundle loader doesn't put the repo root on sys.path, so
+# `dags._env` isn't importable as a package -- import _env directly
+# relative to this file instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import run_in_cheech_env
 
 
 def run_feature_build():
-    team_features = build_features(CURRENT_SEASON)
-    completed = team_features["home_score"].notna().sum()
-    upcoming = team_features["home_score"].isna().sum()
-    print(f"Built features for {len(team_features)} games ({completed} completed, {upcoming} upcoming)")
+    run_in_cheech_env("predict", "run_feature_build")
 
 
 def run_predictions():
-    # Rebuilds features rather than reading run_feature_build()'s output --
-    # Airflow XCom isn't a good fit for passing a season's worth of
-    # DataFrames between tasks, and refetching/rebuilding takes a few
-    # seconds at this data volume. Keeping each task self-contained is
-    # simpler than wiring a shared-storage handoff just to avoid that.
-    team_features = build_features(CURRENT_SEASON)
-    predictions = train_and_predict_winner(team_features)
-    if predictions.empty:
-        print("No predictions generated (no completed games to train on yet, or no upcoming games)")
-        return
-
-    engine = get_engine()
-    init_db(engine)
-    n = persist_predictions(engine, predictions, market="winner")
-    print(f"Persisted {n} winner predictions")
+    run_in_cheech_env("predict", "run_predictions")
 
 
 with DAG(
