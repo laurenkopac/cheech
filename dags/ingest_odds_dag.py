@@ -2,22 +2,27 @@
 Frequent odds ingestion — run often enough to capture meaningful line
 movement without burning through API quota. Every few hours is a
 reasonable starting cadence.
+
+Task logic lives in dags/tasks/ingest_odds.py and runs inside the `cheech`
+conda env (see dags/_env.py) -- this file only holds Airflow's own DAG
+definition, since Airflow runs in its own isolated env.
 """
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.odds import get_current_odds, persist_odds_snapshot
-from src.tracking.db import get_engine, init_db
+# Airflow's DAG bundle loader doesn't put the repo root on sys.path, so
+# `dags._env` isn't importable as a package -- import _env directly
+# relative to this file instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import run_in_cheech_env
 
 
 def run_odds_ingestion():
-    engine = get_engine()
-    init_db(engine)
-    games = get_current_odds()
-    n = persist_odds_snapshot(engine, games)
-    print(f"Upserted {n} odds snapshot rows for {len(games)} games")
+    run_in_cheech_env("ingest_odds", "run_odds_ingestion")
 
 
 with DAG(

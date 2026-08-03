@@ -2,35 +2,35 @@
 Daily ingestion of nflverse stats: schedules, injuries, snap counts.
 Play-by-play is heavier — run it less frequently (e.g. weekly, or after
 each week's games complete) by adjusting the schedule below.
+
+Task logic lives in dags/tasks/ingest_stats.py and runs inside the `cheech`
+conda env (see dags/_env.py) -- this file only holds Airflow's own DAG
+definition, since Airflow runs in its own isolated env.
 """
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from src.ingestion.stats import persist_schedules, persist_injuries, persist_snap_counts
-from src.tracking.db import get_engine, init_db
-
-CURRENT_SEASON = 2026
+# Airflow's DAG bundle loader doesn't put the repo root on sys.path, so
+# `dags._env` isn't importable as a package -- import _env directly
+# relative to this file instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _env import run_in_cheech_env
 
 
 def run_schedules():
-    engine = get_engine()
-    init_db(engine)
-    n = persist_schedules(engine, [CURRENT_SEASON])
-    print(f"Upserted {n} schedule rows")
+    run_in_cheech_env("ingest_stats", "run_schedules")
 
 
 def run_injuries():
-    engine = get_engine()
-    n = persist_injuries(engine, [CURRENT_SEASON])
-    print(f"Upserted {n} injury rows")
+    run_in_cheech_env("ingest_stats", "run_injuries")
 
 
 def run_snap_counts():
-    engine = get_engine()
-    n = persist_snap_counts(engine, [CURRENT_SEASON])
-    print(f"Upserted {n} snap count rows")
+    run_in_cheech_env("ingest_stats", "run_snap_counts")
 
 
 with DAG(
