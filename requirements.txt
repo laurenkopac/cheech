@@ -22,6 +22,7 @@ psycopg2-binary   # remove if using SQLite only
 # Newsletter
 anthropic         # or openai, whichever LLM you use to summarize
 jinja2            # email templating
+markdown          # renders the LLM's markdown draft to HTML for the email body
 
 # Dashboard
 streamlit
