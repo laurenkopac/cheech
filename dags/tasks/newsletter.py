@@ -18,8 +18,8 @@ def run_newsletter():
         print("No content available yet — skipping send until ingestion is wired up.")
         return
 
-    body = draft_newsletter(news_items, model_edges)
-    send_newsletter(subject="Your Daily Cheech Digest", body_text=body)
+    data = draft_newsletter(news_items, model_edges)
+    send_newsletter(subject="Your Daily Cheech Digest", data=data)
 
 
 if __name__ == "__main__":
