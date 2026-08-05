@@ -14,7 +14,8 @@ from src.tracking.db import get_engine, init_db, upsert_rows
 
 FEEDS = {
     "espn_nfl": "https://www.espn.com/espn/rss/nfl/news",
-    "nfl_news": "https://www.nfl.com/feeds/rss/news",
+    # nfl.com/feeds/rss/news 404s as of 2026-08 -- NFL.com discontinued its
+    # native RSS endpoint, no official replacement.
     "pft": "https://www.nbcsports.com/profootballtalk.rss",
     "cbs_sports_nfl": "https://www.cbssports.com/rss/headlines/nfl/",
     "yahoo_sports_nfl": "https://sports.yahoo.com/nfl/rss/",
