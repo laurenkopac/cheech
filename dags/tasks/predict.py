@@ -26,7 +26,7 @@ def run_feature_build():
     upcoming = team_features["home_score"].isna().sum()
     print(f"Built team features for {len(team_features)} games ({completed} completed, {upcoming} upcoming)")
 
-    player_features = build_player_features(CURRENT_SEASON)
+    player_features = build_player_features(CURRENT_SEASON, team_features)
     real = player_features["anytime_td"].notna().sum()
     projected = player_features["anytime_td"].isna().sum()
     print(f"Built player features for {len(player_features)} player-games ({real} real, {projected} projected)")
@@ -49,7 +49,7 @@ def run_predictions():
         n = persist_predictions(engine, winner_predictions, market="winner")
         print(f"Persisted {n} winner predictions")
 
-    player_features = build_player_features(CURRENT_SEASON)
+    player_features = build_player_features(CURRENT_SEASON, team_features)
     td_predictions = train_and_predict_anytime_td(player_features)
     if td_predictions.empty:
         print("No anytime-TD predictions generated (no completed games to train on yet, or no projected rows)")

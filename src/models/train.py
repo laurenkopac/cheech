@@ -7,11 +7,12 @@ pre-news and post-news predictions independently comparable).
 """
 import json
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 
 import pandas as pd
 
 from src.ingestion.odds import get_current_odds
-from src.ingestion.stats import get_play_by_play, get_rosters, get_schedules
+from src.ingestion.stats import get_injuries, get_play_by_play, get_rosters, get_schedules
 from src.models.features import attach_odds_features, build_player_td_features, build_team_game_features
 from src.models.td_model import predict_anytime_td_probabilities, train_anytime_td_model
 from src.models.winner_model import predict_winner_probabilities, train_winner_model
@@ -26,8 +27,11 @@ NON_FEATURE_COLS = {
 PLAYER_FEATURE_COLS = [
     "touches_trailing", "redzone_touches_trailing", "target_share_trailing",
     "anytime_td_trailing", "opponent_position_td_rate_allowed_trailing",
+    "team_redzone_td_rate_trailing", "team_implied_total", "teammates_out_count",
 ]
 PLAYER_CATEGORICAL_COLS = ["position"]
+
+INJURY_COLS = ["season", "week", "team", "gsis_id", "full_name", "position", "report_status", "practice_status"]
 
 
 def _next_upcoming_week_mask(features: pd.DataFrame, is_completed: pd.Series) -> pd.Series:
@@ -113,14 +117,29 @@ def train_and_predict_winner(team_features: pd.DataFrame) -> pd.DataFrame:
     return upcoming[["game_id", "subject", "predicted_probability", "feature_snapshot"]]
 
 
-def build_player_features(season: int) -> pd.DataFrame:
-    """Fetch pbp/rosters/schedules live and build one season's player-game
-    TD features, covering both completed and (via the current roster's
-    upcoming schedule) projected upcoming games."""
+def build_player_features(season: int, team_features: pd.DataFrame) -> pd.DataFrame:
+    """Fetch pbp/rosters/schedules/injuries live and build one season's
+    player-game TD features, covering both completed and (via the current
+    roster's upcoming schedule) projected upcoming games.
+
+    `team_features` should be build_features(season)'s output (team-game
+    features with odds already attached) -- passed in rather than
+    refetched here, both because it's needed for team-level TD context
+    (own-team red-zone efficiency, vegas-implied team total) and because
+    calling get_current_odds() a second time per predict_dag run would
+    burn through the Odds API's free-tier rate limit for no reason.
+    """
     pbp = get_play_by_play([season])
     rosters = get_rosters([season])
     schedules = get_schedules([season])
-    return build_player_td_features(pbp, rosters, schedules)
+    try:
+        injuries = get_injuries([season])
+    except HTTPError:
+        # Same story as build_team_game_features's empty-pbp tolerance --
+        # nflverse hasn't published an injury report for this season yet
+        # (true every year until Week 1).
+        injuries = pd.DataFrame(columns=INJURY_COLS)
+    return build_player_td_features(pbp, rosters, schedules, team_features=team_features, injuries=injuries)
 
 
 def train_and_predict_anytime_td(player_features: pd.DataFrame) -> pd.DataFrame:
@@ -195,7 +214,7 @@ if __name__ == "__main__":
         print("No winner predictions to persist (no completed games to train on yet, or no upcoming games).")
 
     print(f"\nBuilding player features for {season}...")
-    player_features = build_player_features(season)
+    player_features = build_player_features(season, team_features)
     print(f"player_features: {player_features.shape}, "
           f"real={player_features['anytime_td'].notna().sum()}, "
           f"projected={player_features['anytime_td'].isna().sum()}")
