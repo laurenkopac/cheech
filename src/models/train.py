@@ -30,6 +30,32 @@ PLAYER_FEATURE_COLS = [
 PLAYER_CATEGORICAL_COLS = ["position"]
 
 
+def _next_upcoming_week_mask(features: pd.DataFrame, is_completed: pd.Series) -> pd.Series:
+    """
+    True only for rows that are both upcoming and in the single nearest
+    upcoming week.
+
+    predict_dag runs weekly (Tuesday, ahead of that week's slate) -- both
+    train_and_predict_winner and train_and_predict_anytime_td used to
+    predict on *every* remaining week of the season each run, since
+    build_team_game_features/build_player_td_features both build a row for
+    every game/projected player-game regardless of week. That's more than
+    the DAG needs (only the upcoming week's slate is actionable right now)
+    and makes each week's prediction snapshot a poor match for CLV
+    tracking, which assumes a prediction was made close to when the odds
+    it's compared against actually reflect that week's line, not weeks
+    early. Restricting to the single nearest upcoming week keeps each
+    week's `generated_at` snapshot meaning "this week's predictions," and
+    naturally refreshes as bye weeks/injuries/lineup changes happen closer
+    to kickoff, rather than locking in a prediction made a month out.
+    """
+    upcoming_weeks = features.loc[~is_completed, "week"]
+    if upcoming_weeks.empty:
+        return pd.Series(False, index=features.index)
+    next_week = upcoming_weeks.min()
+    return (~is_completed) & (features["week"] == next_week)
+
+
 def build_features(season: int) -> pd.DataFrame:
     """Fetch pbp/schedules/odds live and build one season's team-game
     features, covering both completed and upcoming games."""
@@ -43,7 +69,8 @@ def build_features(season: int) -> pd.DataFrame:
 def train_and_predict_winner(team_features: pd.DataFrame) -> pd.DataFrame:
     """
     Trains XGBoost on completed games (home_score not null) and predicts
-    on upcoming ones (home_score null). Returns one row per upcoming game:
+    on the single nearest upcoming week's games (see
+    _next_upcoming_week_mask). Returns one row per game in that week:
     game_id, subject (home team), predicted_probability, feature_snapshot
     (JSON of that game's exact feature row) -- ready for
     persist_predictions(). Empty if there's no training data yet (e.g.
@@ -66,7 +93,8 @@ def train_and_predict_winner(team_features: pd.DataFrame) -> pd.DataFrame:
     labels = (team_features["home_score"] > team_features["away_score"]).astype(int)
 
     X_train, y_train = matrix[is_completed], labels[is_completed]
-    X_predict = matrix[~is_completed]
+    is_next_week = _next_upcoming_week_mask(team_features, is_completed)
+    X_predict = matrix[is_next_week]
     if X_train.empty or X_predict.empty:
         return pd.DataFrame(columns=["game_id", "subject", "predicted_probability", "feature_snapshot"])
 
@@ -77,7 +105,7 @@ def train_and_predict_winner(team_features: pd.DataFrame) -> pd.DataFrame:
     # JSON (same trick used in src/ingestion/stats.py).
     snapshots = json.loads(X_predict.to_json(orient="records"))
 
-    upcoming = team_features.loc[~is_completed, ["game_id", "home_team"]].rename(columns={"home_team": "subject"})
+    upcoming = team_features.loc[is_next_week, ["game_id", "home_team"]].rename(columns={"home_team": "subject"})
     upcoming = upcoming.assign(
         predicted_probability=probs.values,
         feature_snapshot=[json.dumps(s) for s in snapshots],
@@ -98,13 +126,14 @@ def build_player_features(season: int) -> pd.DataFrame:
 def train_and_predict_anytime_td(player_features: pd.DataFrame) -> pd.DataFrame:
     """
     Trains XGBoost on real player-games (anytime_td not null) and predicts
-    on projected upcoming ones (anytime_td null -- see
-    build_player_td_features). Returns one row per projected player-game:
-    game_id, subject ("Player Name (TEAM)"), predicted_probability,
-    feature_snapshot. Empty if there's no training data yet or no
-    projected rows to predict on (e.g. before Week 1, when no games have
-    been played this season and no player has real trailing history to
-    project from).
+    on projected player-games in the single nearest upcoming week (see
+    _next_upcoming_week_mask; projected rows themselves come from
+    build_player_td_features). Returns one row per projected player-game
+    in that week: game_id, subject ("Player Name (TEAM)"),
+    predicted_probability, feature_snapshot. Empty if there's no training
+    data yet or no projected rows to predict on (e.g. before Week 1, when
+    no games have been played this season and no player has real trailing
+    history to project from).
     """
     matrix = pd.get_dummies(
         player_features[PLAYER_FEATURE_COLS + PLAYER_CATEGORICAL_COLS],
@@ -115,7 +144,8 @@ def train_and_predict_anytime_td(player_features: pd.DataFrame) -> pd.DataFrame:
     labels = player_features["anytime_td"].fillna(0).astype(int)
 
     X_train, y_train = matrix[is_completed], labels[is_completed]
-    X_predict = matrix[~is_completed]
+    is_next_week = _next_upcoming_week_mask(player_features, is_completed)
+    X_predict = matrix[is_next_week]
     if X_train.empty or X_predict.empty:
         return pd.DataFrame(columns=["game_id", "subject", "predicted_probability", "feature_snapshot"])
 
@@ -124,7 +154,7 @@ def train_and_predict_anytime_td(player_features: pd.DataFrame) -> pd.DataFrame:
 
     snapshots = json.loads(X_predict.to_json(orient="records"))
 
-    upcoming = player_features.loc[~is_completed, ["game_id", "player_name", "team"]]
+    upcoming = player_features.loc[is_next_week, ["game_id", "player_name", "team"]]
     subjects = upcoming["player_name"].fillna("Unknown player") + " (" + upcoming["team"].fillna("?") + ")"
     upcoming = upcoming.assign(
         subject=subjects.values,
