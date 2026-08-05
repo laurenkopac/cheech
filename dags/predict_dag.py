@@ -2,13 +2,13 @@
 Generates predictions ahead of each week's slate. Runs after stats/odds/news
 ingestion so features reflect the latest information.
 
-Only the winner model is wired up here. Anytime-TD prediction needs a
-player-level projection step (current roster + each player's latest
-trailing stats + the upcoming opponent) that build_player_td_features
-doesn't provide -- it's driven entirely by play-by-play, so it only has
-rows for games that have already been played. See src/models/train.py's
-module docstring for the full explanation; that's a real design task of
-its own, not a small addition here.
+Both the winner model and the anytime-TD model are wired up here.
+build_player_td_features's optional `schedules` argument projects one row
+per (player, upcoming game) for every player with real game history this
+season -- current roster team/position + trailing stats averaged over
+their real games so far -- so it's usable for prediction, not just
+training. See src/models/features.py's build_player_td_features docstring
+for the full explanation.
 
 Task logic lives in dags/tasks/predict.py and runs inside the `cheech`
 conda env (see dags/_env.py) -- this file only holds Airflow's own DAG

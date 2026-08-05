@@ -12,7 +12,7 @@ from src.tracking.db import get_engine
 def run_newsletter():
     engine = get_engine()
     news_items = get_recent_news_items(engine)
-    model_edges = get_latest_model_edges(engine)
+    model_edges = get_latest_model_edges(engine, market="winner") + get_latest_model_edges(engine, market="anytime_td")
 
     if not news_items and not model_edges:
         print("No content available yet — skipping send until ingestion is wired up.")
