@@ -21,7 +21,10 @@ CURRENT_SEASON = 2026
 
 
 def run_feature_build():
-    team_features = build_features(CURRENT_SEASON)
+    engine = get_engine()
+    init_db(engine)
+
+    team_features = build_features(CURRENT_SEASON, engine)
     completed = team_features["home_score"].notna().sum()
     upcoming = team_features["home_score"].isna().sum()
     print(f"Built team features for {len(team_features)} games ({completed} completed, {upcoming} upcoming)")
@@ -41,7 +44,7 @@ def run_predictions():
     engine = get_engine()
     init_db(engine)
 
-    team_features = build_features(CURRENT_SEASON)
+    team_features = build_features(CURRENT_SEASON, engine)
     winner_predictions = train_and_predict_winner(team_features)
     if winner_predictions.empty:
         print("No winner predictions generated (no completed games to train on yet, or no upcoming games)")

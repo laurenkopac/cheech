@@ -165,19 +165,28 @@ markets into one feed:
   signals beyond usage/matchup: the player's own team's trailing
   offensive red-zone TD rate, that team's vegas-implied point total
   (derived from `market_spread_line`/`market_total_line`), and a count of
-  same-team/same-position players Out/Doubtful on the most recent injury
-  report (so a backup's odds rise when the starter ahead of them is out —
-  also used to exclude ruled-out players from predictions entirely, not
-  just as a feature). All three verified against real data — the implied
-  team total formula against real live 2026 odds (team totals sum back to
-  the real total line, favored team gets the higher total), the other two
-  against real held-out 2025 data. `market_implied_home_win_prob`-style
-  odds/injury signals are only ever populated for the live upcoming week
-  being predicted, not historical training rows (no historical odds
-  retrievable via the live-only Odds API, and no historical injury
-  snapshots persisted yet) — same accepted limitation the winner model's
-  own odds features already have; XGBoost handles the resulting NaN-heavy
-  training columns natively.
+  same-team/same-position players Out/Doubtful (`teammates_out_count`) —
+  real/historical rows use that week's own actual report, projected rows
+  use the most recently known one, since their own week's report doesn't
+  exist yet at prediction time (also used to exclude ruled-out players
+  from predictions entirely, not just as a feature). All three verified
+  against real data — the implied team total formula against real live
+  2026 odds (team totals sum back to the real total line, favored team
+  gets the higher total), the other two against real held-out 2025 data.
+- **Resolved:** historical odds are now readable, not just live ones —
+  `get_closing_odds_for_games` (`src/ingestion/odds.py`) reconstructs each
+  event's closing line from persisted `odds_snapshots` history in the same
+  shape `get_current_odds()` returns, so `attach_odds_features` (and
+  anything built on it, like `team_implied_total`) works identically for
+  historical and live odds. `build_features` combines both, live odds
+  first, backfilled by historical closing lines for anything live odds
+  didn't cover. This only helps once `odds_snapshots` has real accumulated
+  history, though (requires `ingest_odds_dag` actually running over time,
+  or repeated manual invocation, before each game kicks off) — as of
+  2026-08-05 there's exactly one snapshot batch on record (from setting
+  this up), so `team_implied_total` is still 0% populated for training
+  rows in practice. Not a bug, just waiting on real accumulated history —
+  same category as "not live yet" below.
 - Prop models beyond winner/anytime-TD: not started.
 - **Not live yet:** all 5 DAGs are registered but paused, and no
   Airflow scheduler runs continuously on the user's machine — everything

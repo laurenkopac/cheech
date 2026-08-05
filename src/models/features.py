@@ -250,12 +250,15 @@ def build_player_td_features(
 
     If `injuries` is given (raw import_injuries() output, one row per
     player per week-reported), attaches `teammates_out_count` -- how many
-    same-team, same-position players were Out/Doubtful on the most recent
-    report -- so the model can learn that a backup's scoring odds rise
-    when the starter ahead of them is out. Also excludes any player who is
-    themselves Out/Doubtful from the projected/upcoming rows, since
-    predicting a TD probability for someone not expected to play isn't
-    useful. See `_latest_injury_reports`/`_teammate_out_counts`.
+    same-team, same-position players were Out/Doubtful -- so the model can
+    learn that a backup's scoring odds rise when the starter ahead of them
+    is out. Real/historical rows get that week's own actual report
+    (`_teammate_out_counts_by_week`); projected/upcoming rows get the most
+    recently known report instead (`_latest_injury_reports`/
+    `_teammate_out_counts`), since their own week's report doesn't exist
+    yet when predict_dag runs. Also excludes any player who is themselves
+    Out/Doubtful from the projected/upcoming rows, since predicting a TD
+    probability for someone not expected to play isn't useful.
 
     Tolerates `pbp` being completely empty (nfl_data_py returns an empty,
     columnless DataFrame -- rather than raising -- for a season with no
@@ -368,26 +371,32 @@ def build_player_td_features(
 
         historical = player_game.drop(columns=["rush_touches", "rush_redzone_touches", "rec_redzone_touches"])
 
+    if injuries is not None:
+        # Week-exact join for real/historical rows -- each row gets that
+        # week's own actual report, not "whatever's most recently known
+        # right now" (that would leak later injury news backward onto
+        # earlier training rows). Deliberately not gated on
+        # `injuries.empty`: even with zero rows (e.g. preseason, before
+        # nflverse publishes any report), _teammate_out_counts_by_week
+        # still returns a properly-columned empty frame, so the merge adds
+        # `teammates_out_count` as an all-NaN column rather than omitting
+        # it -- callers with a fixed feature-column list
+        # (train_and_predict_anytime_td) need that column to always exist.
+        historical = historical.merge(
+            _teammate_out_counts_by_week(injuries), on=["team", "position", "week", "season"], how="left"
+        )
+
     if schedules is None:
         combined = historical
     else:
+        # Projected rows get teammates_out_count via the "most recently
+        # known" proxy instead (see _project_upcoming_player_rows) --
+        # their own week's report doesn't exist yet at prediction time.
         projected = _project_upcoming_player_rows(historical, rosters, schedules, injuries=injuries)
         combined = pd.concat([historical, projected], ignore_index=True)
 
     if team_features is not None:
         combined = combined.merge(_melt_team_context(team_features), on=["team", "game_id"], how="left")
-
-    if injuries is not None:
-        # Deliberately not gated on `injuries.empty` -- even with zero rows
-        # (e.g. preseason, before nflverse publishes any report),
-        # _teammate_out_counts still returns a properly-columned empty
-        # frame, so the merge still adds `teammates_out_count` as an
-        # all-NaN column rather than omitting it. Callers with a fixed
-        # feature-column list (train_and_predict_anytime_td) need that
-        # column to always exist.
-        latest_reports = _latest_injury_reports(injuries)
-        teammate_counts = _teammate_out_counts(latest_reports)
-        combined = combined.merge(teammate_counts, on=["team", "position", "season"], how="left")
 
     return combined
 
@@ -489,6 +498,13 @@ def _project_upcoming_player_rows(
     )
     projected = projected.merge(defense_allowed_now, on=["opponent", "position", "season"], how="left")
 
+    if injuries is not None:
+        # "Most recently known" proxy, not week-exact -- the upcoming
+        # week's own report doesn't exist yet when predict_dag runs
+        # (Tuesday, before Wed/Thu/Fri practice reports).
+        teammate_counts = _teammate_out_counts(_latest_injury_reports(injuries))
+        projected = projected.merge(teammate_counts, on=["team", "position", "season"], how="left")
+
     for col in ["targets", "receptions", "touches", "redzone_touches", "team_targets", "target_share", "anytime_td"]:
         projected[col] = np.nan
 
@@ -563,17 +579,24 @@ def _latest_injury_reports(injuries: pd.DataFrame) -> pd.DataFrame:
     return injuries[injuries["week"] == latest_week]
 
 
-def _teammate_out_counts(latest_reports: pd.DataFrame) -> pd.DataFrame:
+def _teammate_out_counts_by_week(injuries: pd.DataFrame) -> pd.DataFrame:
     """
-    One row per (team, position, season) for every position with at least
-    one player on that team's most recent injury report -- including a
-    real 0 for a position the team reported on but had no Out/Doubtful
-    player at. That's deliberately different from a team/position with no
-    report at all, which the caller's later left-merge leaves as NaN --
-    XGBoost should see "no data" and "confirmed healthy" as different
-    signals, not both collapsed to a blanket 0.
+    One row per (team, position, week, season) for every position with at
+    least one player reported that week -- including a real 0 for a
+    position the team reported on but had no Out/Doubtful player at.
+    That's deliberately different from a team/position/week with no report
+    at all, which the caller's later left-merge leaves as NaN -- XGBoost
+    should see "no data" and "confirmed healthy" as different signals, not
+    both collapsed to a blanket 0.
+
+    Week-exact by design: this is what makes it safe for real/historical
+    training rows -- each game gets the injury picture as it was reported
+    that week, not "whatever's most recently known right now" (which
+    would leak later injury news backward onto earlier rows). Projected
+    rows use `_teammate_out_counts`'s "most recently known" variant
+    instead, since their own week's report doesn't exist yet.
     """
-    if latest_reports.empty:
+    if injuries.empty:
         # Explicit float64 for teammates_out_count -- an empty frame built
         # via columns=[...] defaults every column to object dtype, and a
         # merge that fills an all-NaN object column (rather than float)
@@ -582,21 +605,33 @@ def _teammate_out_counts(latest_reports: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame({
             "team": pd.Series(dtype="object"),
             "position": pd.Series(dtype="object"),
+            "week": pd.Series(dtype="int64"),
             "season": pd.Series(dtype="int64"),
             "teammates_out_count": pd.Series(dtype="float64"),
         })
 
-    reported_positions = latest_reports[["team", "position", "season"]].drop_duplicates()
-    out = latest_reports[latest_reports["report_status"].isin(INJURY_OUT_STATUSES)]
+    reported_positions = injuries[["team", "position", "week", "season"]].drop_duplicates()
+    out = injuries[injuries["report_status"].isin(INJURY_OUT_STATUSES)]
     out_counts = (
-        out.groupby(["team", "position", "season"])
+        out.groupby(["team", "position", "week", "season"])
         .size()
         .rename("teammates_out_count")
         .reset_index()
     )
-    merged = reported_positions.merge(out_counts, on=["team", "position", "season"], how="left")
+    merged = reported_positions.merge(out_counts, on=["team", "position", "week", "season"], how="left")
     merged["teammates_out_count"] = merged["teammates_out_count"].fillna(0)
     return merged
+
+
+def _teammate_out_counts(latest_reports: pd.DataFrame) -> pd.DataFrame:
+    """
+    One row per (team, position, season), using each team's most recently
+    reported week only (see _latest_injury_reports) -- the "most recently
+    known" proxy used for projected/upcoming rows. Thin wrapper around
+    _teammate_out_counts_by_week: `latest_reports` is already filtered to
+    a single week per team, so dropping `week` from its output is enough.
+    """
+    return _teammate_out_counts_by_week(latest_reports).drop(columns=["week"])
 
 
 def attach_odds_features(features: pd.DataFrame, odds: list[dict]) -> pd.DataFrame:
