@@ -161,6 +161,23 @@ markets into one feed:
   alerting still covers the winner model only — whether TD edges are
   worth their own channel, or folding into the existing predictions
   channel, is still open.
+- **Resolved:** anytime-TD's feature set now includes three context
+  signals beyond usage/matchup: the player's own team's trailing
+  offensive red-zone TD rate, that team's vegas-implied point total
+  (derived from `market_spread_line`/`market_total_line`), and a count of
+  same-team/same-position players Out/Doubtful on the most recent injury
+  report (so a backup's odds rise when the starter ahead of them is out —
+  also used to exclude ruled-out players from predictions entirely, not
+  just as a feature). All three verified against real data — the implied
+  team total formula against real live 2026 odds (team totals sum back to
+  the real total line, favored team gets the higher total), the other two
+  against real held-out 2025 data. `market_implied_home_win_prob`-style
+  odds/injury signals are only ever populated for the live upcoming week
+  being predicted, not historical training rows (no historical odds
+  retrievable via the live-only Odds API, and no historical injury
+  snapshots persisted yet) — same accepted limitation the winner model's
+  own odds features already have; XGBoost handles the resulting NaN-heavy
+  training columns natively.
 - Prop models beyond winner/anytime-TD: not started.
 - **Not live yet:** all 5 DAGs are registered but paused, and no
   Airflow scheduler runs continuously on the user's machine — everything

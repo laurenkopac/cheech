@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 RED_ZONE_YARDLINE = 20
+INJURY_OUT_STATUSES = {"Out", "Doubtful"}
 
 # Full-name -> abbreviation, for joining The Odds API's team names onto
 # nflverse's abbreviations (schedules/pbp use "SEA", the odds API uses
@@ -209,7 +210,11 @@ def build_team_game_features(pbp: pd.DataFrame, schedules: pd.DataFrame) -> pd.D
 
 
 def build_player_td_features(
-    pbp: pd.DataFrame, rosters: pd.DataFrame, schedules: pd.DataFrame = None
+    pbp: pd.DataFrame,
+    rosters: pd.DataFrame,
+    schedules: pd.DataFrame = None,
+    team_features: pd.DataFrame = None,
+    injuries: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """
     One row per player per game with trailing pre-game features (target
@@ -232,6 +237,25 @@ def build_player_td_features(
     is also how callers distinguish "played" from "upcoming" rows
     (`anytime_td.notna()`), mirroring build_team_game_features's
     `home_score.notna()` check.
+
+    If `team_features` is given (build_team_game_features's output, ideally
+    with attach_odds_features already applied), attaches two team-level
+    signals to every row -- the player's own team's trailing offensive
+    red-zone TD rate (a scoring-opportunity signal that's about the whole
+    offense, not just this player) and, when odds are attached,
+    `market_total_line`/`market_spread_line` converted into that team's
+    vegas-implied point total (a team trailing in a shootout gets more
+    scoring opportunities than one expected to grind out a low-scoring
+    game). See `_melt_team_context`.
+
+    If `injuries` is given (raw import_injuries() output, one row per
+    player per week-reported), attaches `teammates_out_count` -- how many
+    same-team, same-position players were Out/Doubtful on the most recent
+    report -- so the model can learn that a backup's scoring odds rise
+    when the starter ahead of them is out. Also excludes any player who is
+    themselves Out/Doubtful from the projected/upcoming rows, since
+    predicting a TD probability for someone not expected to play isn't
+    useful. See `_latest_injury_reports`/`_teammate_out_counts`.
 
     Tolerates `pbp` being completely empty (nfl_data_py returns an empty,
     columnless DataFrame -- rather than raising -- for a season with no
@@ -345,19 +369,43 @@ def build_player_td_features(
         historical = player_game.drop(columns=["rush_touches", "rush_redzone_touches", "rec_redzone_touches"])
 
     if schedules is None:
-        return historical
+        combined = historical
+    else:
+        projected = _project_upcoming_player_rows(historical, rosters, schedules, injuries=injuries)
+        combined = pd.concat([historical, projected], ignore_index=True)
 
-    projected = _project_upcoming_player_rows(historical, rosters, schedules)
-    return pd.concat([historical, projected], ignore_index=True)
+    if team_features is not None:
+        combined = combined.merge(_melt_team_context(team_features), on=["team", "game_id"], how="left")
+
+    if injuries is not None:
+        # Deliberately not gated on `injuries.empty` -- even with zero rows
+        # (e.g. preseason, before nflverse publishes any report),
+        # _teammate_out_counts still returns a properly-columned empty
+        # frame, so the merge still adds `teammates_out_count` as an
+        # all-NaN column rather than omitting it. Callers with a fixed
+        # feature-column list (train_and_predict_anytime_td) need that
+        # column to always exist.
+        latest_reports = _latest_injury_reports(injuries)
+        teammate_counts = _teammate_out_counts(latest_reports)
+        combined = combined.merge(teammate_counts, on=["team", "position", "season"], how="left")
+
+    return combined
 
 
 def _project_upcoming_player_rows(
-    historical: pd.DataFrame, rosters: pd.DataFrame, schedules: pd.DataFrame
+    historical: pd.DataFrame, rosters: pd.DataFrame, schedules: pd.DataFrame, injuries: pd.DataFrame = None
 ) -> pd.DataFrame:
     """
     One row per (player, upcoming game) for players with real game history
     this season, carrying the trailing feature values they'd take into
     their next game.
+
+    If `injuries` is given, players who are Out/Doubtful on their team's
+    most recent report (see _latest_injury_reports) are excluded entirely
+    -- predicting an anytime-TD probability for someone not expected to
+    play isn't useful, and would otherwise look like a real (low, since
+    their trailing features are unaffected by their own current status)
+    prediction rather than "we don't expect this person on the field."
 
     Player-own trailing (touches/redzone_touches/target_share/anytime_td)
     is a plain mean over all of `historical`'s real games for that player
@@ -389,6 +437,22 @@ def _project_upcoming_player_rows(
     )
     if eligible.empty:
         return historical.iloc[0:0]
+
+    if injuries is not None and not injuries.empty:
+        latest_reports = _latest_injury_reports(injuries)
+        ruled_out = (
+            latest_reports[latest_reports["report_status"].isin(INJURY_OUT_STATUSES)]
+            [["gsis_id", "team"]]
+            .rename(columns={"gsis_id": "player_id"})
+            .drop_duplicates()
+        )
+        # indicator=True avoids merging in a True/NaN object-dtype column
+        # (fillna-ing that triggers pandas' downcast-inference deprecation
+        # warning) -- "_merge" is categorical, no ambiguous dtype to infer.
+        eligible = eligible.merge(ruled_out, on=["player_id", "team"], how="left", indicator=True)
+        eligible = eligible[eligible["_merge"] == "left_only"].drop(columns=["_merge"])
+        if eligible.empty:
+            return historical.iloc[0:0]
 
     upcoming = schedules[schedules["home_score"].isna()]
     home = upcoming[["game_id", "season", "week", "home_team", "away_team"]].rename(
@@ -438,6 +502,101 @@ def _project_upcoming_player_rows(
             projected[col] = projected[col].astype(historical[col].dtype)
 
     return projected
+
+
+def _melt_team_context(team_features: pd.DataFrame) -> pd.DataFrame:
+    """
+    team_features (build_team_game_features's output, or that plus
+    attach_odds_features) has separate home_*/away_* columns and a single
+    game-level (not per-team) market_spread_line/market_total_line pair.
+    Reshape into one row per (team, game_id) with that team's own trailing
+    offensive red-zone TD rate and vegas-implied point total, so it's
+    joinable onto player-level rows regardless of home/away.
+
+    Implied team total: given the total line T and the home team's own
+    spread S (negative if favored, e.g. -3.5 -- see attach_odds_features),
+    home_total + away_total = T and home_total - away_total = -S, so
+    home_total = (T - S) / 2 and away_total = (T + S) / 2. Verified against
+    a real live line (Seahawks -3.5, total 44.5 -> home 24.0 / away 20.5).
+
+    Tolerates market_spread_line/market_total_line being absent (plain
+    build_team_game_features output, odds not attached) -- team_implied_total
+    is just NaN throughout in that case.
+    """
+    has_odds = "market_spread_line" in team_features.columns and "market_total_line" in team_features.columns
+    if has_odds:
+        home_implied_total = (team_features["market_total_line"] - team_features["market_spread_line"]) / 2
+        away_implied_total = (team_features["market_total_line"] + team_features["market_spread_line"]) / 2
+    else:
+        home_implied_total = np.nan
+        away_implied_total = np.nan
+
+    home = pd.DataFrame({
+        "team": team_features["home_team"],
+        "game_id": team_features["game_id"],
+        "team_redzone_td_rate_trailing": team_features["home_off_redzone_td_rate_trailing"],
+        "team_implied_total": home_implied_total,
+    })
+    away = pd.DataFrame({
+        "team": team_features["away_team"],
+        "game_id": team_features["game_id"],
+        "team_redzone_td_rate_trailing": team_features["away_off_redzone_td_rate_trailing"],
+        "team_implied_total": away_implied_total,
+    })
+    return pd.concat([home, away], ignore_index=True)
+
+
+def _latest_injury_reports(injuries: pd.DataFrame) -> pd.DataFrame:
+    """
+    Each team's most recently reported week only, not a week-exact join.
+    predict_dag runs Tuesday, before that week's own injury report is
+    published (practice reports start Wednesday) -- so the upcoming week
+    actually being predicted usually has no report of its own yet when
+    features are built. Using the latest available report as a "most
+    recently known roster health" proxy matches the same philosophy as the
+    roster snapshot used for a projected row's team/position (see
+    _project_upcoming_player_rows).
+    """
+    if injuries.empty:
+        return injuries
+    latest_week = injuries.groupby(["team", "season"])["week"].transform("max")
+    return injuries[injuries["week"] == latest_week]
+
+
+def _teammate_out_counts(latest_reports: pd.DataFrame) -> pd.DataFrame:
+    """
+    One row per (team, position, season) for every position with at least
+    one player on that team's most recent injury report -- including a
+    real 0 for a position the team reported on but had no Out/Doubtful
+    player at. That's deliberately different from a team/position with no
+    report at all, which the caller's later left-merge leaves as NaN --
+    XGBoost should see "no data" and "confirmed healthy" as different
+    signals, not both collapsed to a blanket 0.
+    """
+    if latest_reports.empty:
+        # Explicit float64 for teammates_out_count -- an empty frame built
+        # via columns=[...] defaults every column to object dtype, and a
+        # merge that fills an all-NaN object column (rather than float)
+        # makes XGBoost reject the whole matrix at fit time ("DataFrame
+        # dtypes for data must be int, float, bool or category").
+        return pd.DataFrame({
+            "team": pd.Series(dtype="object"),
+            "position": pd.Series(dtype="object"),
+            "season": pd.Series(dtype="int64"),
+            "teammates_out_count": pd.Series(dtype="float64"),
+        })
+
+    reported_positions = latest_reports[["team", "position", "season"]].drop_duplicates()
+    out = latest_reports[latest_reports["report_status"].isin(INJURY_OUT_STATUSES)]
+    out_counts = (
+        out.groupby(["team", "position", "season"])
+        .size()
+        .rename("teammates_out_count")
+        .reset_index()
+    )
+    merged = reported_positions.merge(out_counts, on=["team", "position", "season"], how="left")
+    merged["teammates_out_count"] = merged["teammates_out_count"].fillna(0)
+    return merged
 
 
 def attach_odds_features(features: pd.DataFrame, odds: list[dict]) -> pd.DataFrame:
