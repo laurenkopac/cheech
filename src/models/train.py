@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 
 import pandas as pd
 
-from src.ingestion.odds import get_current_odds
+from src.ingestion.odds import get_closing_odds_for_games, get_current_odds
 from src.ingestion.stats import get_injuries, get_play_by_play, get_rosters, get_schedules
 from src.models.features import attach_odds_features, build_player_td_features, build_team_game_features
 from src.models.td_model import predict_anytime_td_probabilities, train_anytime_td_model
@@ -60,14 +60,36 @@ def _next_upcoming_week_mask(features: pd.DataFrame, is_completed: pd.Series) ->
     return (~is_completed) & (features["week"] == next_week)
 
 
-def build_features(season: int) -> pd.DataFrame:
+def build_features(season: int, engine=None) -> pd.DataFrame:
     """Fetch pbp/schedules/odds live and build one season's team-game
-    features, covering both completed and upcoming games."""
+    features, covering both completed and upcoming games.
+
+    Live odds (get_current_odds()) only ever cover currently-listed,
+    not-yet-played games -- attaching them alone leaves market_* columns
+    NaN for every completed game, which is most of a season's training
+    data. If `engine` is given, also reconstructs each played game's
+    closing line from persisted odds_snapshots history
+    (get_closing_odds_for_games) and fills in whatever live odds didn't
+    match. Only as good as how much snapshot history has actually
+    accumulated (requires ingest_odds_dag to have been running, or manual
+    invocation, before those games kicked off) -- games with no snapshot
+    on record just stay NaN, same as the existing "unmatched odds" case.
+    """
     pbp = get_play_by_play([season])
     schedules = get_schedules([season])
     team_features = build_team_game_features(pbp, schedules)
-    odds = get_current_odds()
-    return attach_odds_features(team_features, odds)
+
+    team_features = attach_odds_features(team_features, get_current_odds())
+
+    if engine is not None:
+        historical_odds = get_closing_odds_for_games(engine, schedules)
+        if historical_odds:
+            historical_attached = attach_odds_features(team_features, historical_odds)
+            odds_cols = ["market_implied_home_win_prob", "market_spread_line", "market_total_line", "n_bookmakers"]
+            for col in odds_cols:
+                team_features[col] = team_features[col].fillna(historical_attached[col])
+
+    return team_features
 
 
 def train_and_predict_winner(team_features: pd.DataFrame) -> pd.DataFrame:
@@ -195,18 +217,20 @@ def persist_predictions(engine, predictions: pd.DataFrame, market: str) -> int:
 
 if __name__ == "__main__":
     season = 2026
+    engine = get_engine()
+    init_db(engine)
+
     print(f"Building features for {season}...")
-    team_features = build_features(season)
+    team_features = build_features(season, engine)
     print(f"team_features: {team_features.shape}, "
           f"completed={team_features['home_score'].notna().sum()}, "
-          f"upcoming={team_features['home_score'].isna().sum()}")
+          f"upcoming={team_features['home_score'].isna().sum()}, "
+          f"with_market_data={team_features['market_spread_line'].notna().sum()}")
 
     predictions = train_and_predict_winner(team_features)
     print(f"Generated {len(predictions)} winner predictions")
 
     if not predictions.empty:
-        engine = get_engine()
-        init_db(engine)
         n = persist_predictions(engine, predictions, market="winner")
         print(f"Upserted {n} prediction rows")
         print(predictions[["game_id", "subject", "predicted_probability"]].head(10))
@@ -223,8 +247,6 @@ if __name__ == "__main__":
     print(f"Generated {len(td_predictions)} anytime-TD predictions")
 
     if not td_predictions.empty:
-        engine = get_engine()
-        init_db(engine)
         n = persist_predictions(engine, td_predictions, market="anytime_td")
         print(f"Upserted {n} anytime-TD prediction rows")
         print(td_predictions.sort_values("predicted_probability", ascending=False)

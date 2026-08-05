@@ -8,7 +8,9 @@ import json
 import os
 from datetime import datetime, timezone
 
+import pandas as pd
 import requests
+from sqlalchemy import text
 
 from src.tracking.db import get_engine, init_db, upsert_rows
 
@@ -57,6 +59,77 @@ def persist_odds_snapshot(engine, games: list[dict]) -> int:
                     "fetched_at": fetched_at,
                 })
     return upsert_rows(engine, "odds_snapshots", rows, unique_cols=["event_id", "bookmaker", "market", "fetched_at"])
+
+
+def get_closing_odds_for_games(engine, schedules: pd.DataFrame) -> list[dict]:
+    """
+    Reconstruct each event's closing line -- the most recent odds_snapshot
+    fetch for that event no later than kickoff -- from persisted history,
+    in the same nested list[dict] shape get_current_odds() returns (one
+    dict per event, home_team/away_team as the Odds API's own full names,
+    bookmakers -> markets -> outcomes). That means attach_odds_features
+    works identically whether it's given live or historical odds -- no
+    separate matching/name-mapping logic needed here, including which
+    events actually correspond to a played game in `schedules`: that's
+    left entirely to attach_odds_features's existing team-name/date
+    matching, rather than duplicated here against odds_snapshots' own
+    Odds-API event_id (which has no direct join key to nflverse's game_id).
+    Returns events for any game with recorded snapshot history, played or
+    not -- callers combining this with live odds (see build_features)
+    should only use it to fill gaps live odds didn't cover, since live
+    data should always win for a genuinely upcoming game.
+
+    Unlike get_current_odds() (which only ever covers currently-listed,
+    not-yet-played games), this is what makes market_spread_line/
+    market_total_line -- and anything derived from them, like
+    build_player_td_features's team_implied_total -- possible for
+    real/historical training rows at all, since the Odds API itself has no
+    way to look up a past game's line after the fact. Only as good as
+    however much odds_snapshots has actually accumulated, though: this
+    requires ingest_odds_dag to have actually been running (or repeated
+    manual invocation) before a game's kickoff -- a game with no snapshot
+    fetched before it started just isn't in the returned list, same as
+    attach_odds_features's existing "just leave it NaN" tolerance for any
+    other unmatched game.
+
+    `schedules` is only used as a cheap "is there any played game at all
+    this season" fast-path -- skips querying odds_snapshots entirely for a
+    season with nothing played yet (e.g. preseason), since none of this
+    could help build_features fill anything in yet either way.
+    """
+    if schedules["home_score"].isna().all():
+        return []
+
+    with engine.begin() as conn:
+        snapshots = pd.read_sql(text("SELECT * FROM odds_snapshots"), conn)
+    if snapshots.empty:
+        return []
+
+    snapshots["commence_time"] = pd.to_datetime(snapshots["commence_time"], utc=True)
+    snapshots["fetched_at"] = pd.to_datetime(snapshots["fetched_at"], utc=True)
+
+    before_kickoff = snapshots[snapshots["fetched_at"] <= snapshots["commence_time"]]
+    if before_kickoff.empty:
+        return []
+
+    closing_fetched_at = before_kickoff.groupby("event_id")["fetched_at"].transform("max")
+    closing = before_kickoff[before_kickoff["fetched_at"] == closing_fetched_at]
+
+    events = []
+    for event_id, group in closing.groupby("event_id"):
+        first = group.iloc[0]
+        bookmakers: dict[str, dict] = {}
+        for _, row in group.iterrows():
+            bookmaker = bookmakers.setdefault(row["bookmaker"], {"key": row["bookmaker"], "markets": []})
+            bookmaker["markets"].append(json.loads(row["raw_json"]))
+        events.append({
+            "id": event_id,
+            "home_team": first["home_team"],
+            "away_team": first["away_team"],
+            "commence_time": first["commence_time"].isoformat(),
+            "bookmakers": list(bookmakers.values()),
+        })
+    return events
 
 
 if __name__ == "__main__":
