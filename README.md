@@ -110,11 +110,13 @@ own channel via a separate webhook (`src/discord/`). See CLAUDE.md →
 **Not live yet** — see "Run Airflow" above. Everything so far has been
 verified via direct/manual invocation, not a running scheduler.
 
-Not yet built: anytime-TD prediction isn't wired into `generate_predictions`
-— `build_player_td_features` only has rows for games that have already
-been played, and projecting a player's stats onto an upcoming game needs
-a real design pass (see `src/models/train.py`'s module docstring). Prop
-markets beyond winner/anytime-TD haven't been started.
+Both the winner and anytime-TD models are wired into `generate_predictions`
+now — `build_player_td_features` projects one row per (player, upcoming
+game) for current-roster players with real game history this season (see
+its docstring). Verified end-to-end against real held-out 2025 data
+(weeks 11+ masked as "upcoming"); real 2026 predictions won't exist until
+completed games accumulate this season. Prop markets beyond
+winner/anytime-TD haven't been started.
 
 See `sql/schema.sql` for the current schema (schedules, injuries,
 snap_counts, news_items, odds_snapshots, bets, predictions) and

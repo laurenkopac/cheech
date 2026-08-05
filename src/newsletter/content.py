@@ -68,5 +68,9 @@ def get_latest_model_edges(engine, market: str = "winner", top_n: int = 5) -> li
             "edge": edge,
         })
 
-    edges.sort(key=lambda e: (e["edge"] is None, -(e["edge"] or 0)))
+    # Markets with no attached market-implied probability (e.g. anytime_td,
+    # which has no odds join like winner's h2h market does) have edge=None
+    # for every row -- fall back to predicted_probability so "top" still
+    # means something instead of an arbitrary DB-return order.
+    edges.sort(key=lambda e: (e["edge"] is None, -(e["edge"] or 0), -e["predicted_probability"]))
     return edges[:top_n]

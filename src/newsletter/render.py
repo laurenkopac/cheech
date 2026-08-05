@@ -23,9 +23,9 @@ CATEGORY_COLORS = {
 DEFAULT_CATEGORY_COLOR = CATEGORY_COLORS["General"]
 
 # Per-market pill for the Modeling section, keyed by a normalized (lowercase)
-# market name. "winner" is the only market predict_dag actually produces
-# today; the td_scorer/anytime_td keys are here so this doesn't need
-# revisiting once the TD model is wired in (see CLAUDE.md open decisions).
+# market name. "winner" and "anytime_td" are both produced by predict_dag;
+# first_td/td_scorer are here pre-emptively for other TD-shaped markets
+# that aren't modeled yet (see CLAUDE.md open decisions).
 MARKET_BADGES = {
     "winner": ("Picks", "#cffafe", "#0e7490"),
     "anytime_td": ("TD", "#dcfce7", "#15803d"),

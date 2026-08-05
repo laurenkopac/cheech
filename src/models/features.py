@@ -208,7 +208,9 @@ def build_team_game_features(pbp: pd.DataFrame, schedules: pd.DataFrame) -> pd.D
     return sched.merge(home, on=["game_id", "home_team"]).merge(away, on=["game_id", "away_team"])
 
 
-def build_player_td_features(pbp: pd.DataFrame, rosters: pd.DataFrame) -> pd.DataFrame:
+def build_player_td_features(
+    pbp: pd.DataFrame, rosters: pd.DataFrame, schedules: pd.DataFrame = None
+) -> pd.DataFrame:
     """
     One row per player per game with trailing pre-game features (target
     share, touches/game, red-zone touches/game, historical TD rate, and
@@ -216,98 +218,226 @@ def build_player_td_features(pbp: pd.DataFrame, rosters: pd.DataFrame) -> pd.Dat
     position). Also includes same-game context columns (touches,
     targets, anytime_td) needed to derive labels downstream -- those are
     NOT safe to use as model input, only the `*_trailing` columns are.
+
+    If `schedules` is given, also appends one projected row per (player,
+    upcoming game) for every player with real game history this season on
+    a team with a scheduled-but-unplayed game -- current roster
+    team/position (via `rosters`), trailing features averaged over all
+    their real games so far, and the opponent's trailing TD-rate-allowed
+    computed the same way (see `_project_upcoming_player_rows`). This is
+    what makes the function usable for generating predictions on upcoming
+    games, not just training on played ones -- the player-level analog of
+    build_team_game_features's schedule skeleton. Same-game columns
+    (touches, targets, anytime_td, ...) are NaN on projected rows, which
+    is also how callers distinguish "played" from "upcoming" rows
+    (`anytime_td.notna()`), mirroring build_team_game_features's
+    `home_score.notna()` check.
+
+    Tolerates `pbp` being completely empty (nfl_data_py returns an empty,
+    columnless DataFrame -- rather than raising -- for a season with no
+    games played yet, e.g. preseason before Week 1): in that case there's
+    no historical player-game data, and (per `_project_upcoming_player_rows`)
+    no projected rows either, since projection requires real history to
+    average -- same "correctly produces 0 rows" behavior as
+    build_team_game_features/train_and_predict_winner in that situation.
     """
-    rush = pbp[pbp["rusher_player_id"].notna()].copy()
-    rec = pbp[pbp["receiver_player_id"].notna()].copy()
+    HISTORICAL_COLS = [
+        "player_id", "game_id", "posteam", "week", "season", "targets", "receptions",
+        "touches", "redzone_touches", "team_targets", "target_share", "anytime_td",
+        "team", "position", "player_name", "opponent",
+        "opponent_position_td_rate_allowed_trailing", "touches_trailing",
+        "redzone_touches_trailing", "target_share_trailing", "anytime_td_trailing",
+    ]
 
-    rush_agg = (
-        rush.groupby(["rusher_player_id", "game_id", "posteam", "week", "season"])
-        .agg(
-            rush_touches=("rusher_player_id", "size"),
-            rush_redzone_touches=("yardline_100", lambda s: (s <= RED_ZONE_YARDLINE).sum()),
+    if pbp.empty or "rusher_player_id" not in pbp.columns:
+        historical = pd.DataFrame(columns=HISTORICAL_COLS)
+    else:
+        rush = pbp[pbp["rusher_player_id"].notna()].copy()
+        rec = pbp[pbp["receiver_player_id"].notna()].copy()
+
+        rush_agg = (
+            rush.groupby(["rusher_player_id", "game_id", "posteam", "week", "season"])
+            .agg(
+                rush_touches=("rusher_player_id", "size"),
+                rush_redzone_touches=("yardline_100", lambda s: (s <= RED_ZONE_YARDLINE).sum()),
+            )
+            .reset_index()
+            .rename(columns={"rusher_player_id": "player_id"})
         )
-        .reset_index()
-        .rename(columns={"rusher_player_id": "player_id"})
-    )
-    rec_agg = (
-        rec.groupby(["receiver_player_id", "game_id", "posteam", "week", "season"])
-        .agg(
-            targets=("receiver_player_id", "size"),
-            receptions=("complete_pass", "sum"),
-            rec_redzone_touches=("yardline_100", lambda s: (s <= RED_ZONE_YARDLINE).sum()),
+        rec_agg = (
+            rec.groupby(["receiver_player_id", "game_id", "posteam", "week", "season"])
+            .agg(
+                targets=("receiver_player_id", "size"),
+                receptions=("complete_pass", "sum"),
+                rec_redzone_touches=("yardline_100", lambda s: (s <= RED_ZONE_YARDLINE).sum()),
+            )
+            .reset_index()
+            .rename(columns={"receiver_player_id": "player_id"})
         )
-        .reset_index()
-        .rename(columns={"receiver_player_id": "player_id"})
-    )
 
-    player_game = rush_agg.merge(
-        rec_agg, on=["player_id", "game_id", "posteam", "week", "season"], how="outer"
-    )
-    count_cols = ["rush_touches", "rush_redzone_touches", "targets", "receptions", "rec_redzone_touches"]
-    player_game[count_cols] = player_game[count_cols].fillna(0)
-    player_game["touches"] = player_game["rush_touches"] + player_game["receptions"]
-    player_game["redzone_touches"] = player_game["rush_redzone_touches"] + player_game["rec_redzone_touches"]
+        player_game = rush_agg.merge(
+            rec_agg, on=["player_id", "game_id", "posteam", "week", "season"], how="outer"
+        )
+        count_cols = ["rush_touches", "rush_redzone_touches", "targets", "receptions", "rec_redzone_touches"]
+        player_game[count_cols] = player_game[count_cols].fillna(0)
+        player_game["touches"] = player_game["rush_touches"] + player_game["receptions"]
+        player_game["redzone_touches"] = player_game["rush_redzone_touches"] + player_game["rec_redzone_touches"]
 
-    team_targets = rec.groupby(["posteam", "game_id"]).size().rename("team_targets").reset_index()
-    player_game = player_game.merge(team_targets, on=["posteam", "game_id"], how="left")
-    player_game["target_share"] = player_game["targets"] / player_game["team_targets"]
+        team_targets = rec.groupby(["posteam", "game_id"]).size().rename("team_targets").reset_index()
+        player_game = player_game.merge(team_targets, on=["posteam", "game_id"], how="left")
+        player_game["target_share"] = player_game["targets"] / player_game["team_targets"]
 
-    scoring_plays = pbp[(pbp["touchdown"] == 1) & pbp["td_player_id"].notna()]
-    td_flags = (
-        scoring_plays.groupby(["td_player_id", "game_id"])
-        .size()
-        .rename("anytime_td")
-        .reset_index()
-        .rename(columns={"td_player_id": "player_id"})
-    )
-    player_game = player_game.merge(td_flags, on=["player_id", "game_id"], how="left")
-    player_game["anytime_td"] = player_game["anytime_td"].fillna(0).clip(upper=1).astype(int)
+        scoring_plays = pbp[(pbp["touchdown"] == 1) & pbp["td_player_id"].notna()]
+        td_flags = (
+            scoring_plays.groupby(["td_player_id", "game_id"])
+            .size()
+            .rename("anytime_td")
+            .reset_index()
+            .rename(columns={"td_player_id": "player_id"})
+        )
+        player_game = player_game.merge(td_flags, on=["player_id", "game_id"], how="left")
+        player_game["anytime_td"] = player_game["anytime_td"].fillna(0).clip(upper=1).astype(int)
+
+        roster_cols = (
+            rosters[["player_id", "season", "team", "position", "player_name"]]
+            .dropna(subset=["player_id"])
+            .drop_duplicates(subset=["player_id", "season"])
+        )
+        player_game = player_game.merge(roster_cols, on=["player_id", "season"], how="left")
+        player_game["team"] = player_game["team"].fillna(player_game["posteam"])
+
+        # Opponent for each team-game, derived from pbp's own home/away columns
+        # rather than requiring a schedules argument.
+        game_teams = pbp[["game_id", "home_team", "away_team"]].drop_duplicates()
+        player_game = player_game.merge(game_teams, on="game_id", how="left")
+        player_game["opponent"] = np.where(
+            player_game["posteam"] == player_game["away_team"],
+            player_game["home_team"],
+            player_game["away_team"],
+        )
+        player_game = player_game.drop(columns=["home_team", "away_team"])
+
+        allowed = (
+            player_game.groupby(["opponent", "position", "game_id", "week", "season"])["anytime_td"]
+            .sum()
+            .rename("td_allowed")
+            .reset_index()
+            .rename(columns={"opponent": "defteam"})
+        )
+        allowed = _trailing_average(
+            allowed, group_cols=["defteam", "position", "season"], order_col="week", value_cols=["td_allowed"]
+        )
+        allowed = allowed.rename(columns={
+            "defteam": "opponent",
+            "td_allowed_trailing": "opponent_position_td_rate_allowed_trailing",
+        })
+        player_game = player_game.merge(
+            allowed[["opponent", "position", "week", "season", "opponent_position_td_rate_allowed_trailing"]],
+            on=["opponent", "position", "week", "season"],
+            how="left",
+        )
+
+        value_cols = ["touches", "redzone_touches", "target_share", "anytime_td"]
+        player_game = _trailing_average(
+            player_game, group_cols=["player_id", "season"], order_col="week", value_cols=value_cols
+        )
+
+        historical = player_game.drop(columns=["rush_touches", "rush_redzone_touches", "rec_redzone_touches"])
+
+    if schedules is None:
+        return historical
+
+    projected = _project_upcoming_player_rows(historical, rosters, schedules)
+    return pd.concat([historical, projected], ignore_index=True)
+
+
+def _project_upcoming_player_rows(
+    historical: pd.DataFrame, rosters: pd.DataFrame, schedules: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    One row per (player, upcoming game) for players with real game history
+    this season, carrying the trailing feature values they'd take into
+    their next game.
+
+    Player-own trailing (touches/redzone_touches/target_share/anytime_td)
+    is a plain mean over all of `historical`'s real games for that player
+    -- not the shift+expanding sequence `_trailing_average` uses, since
+    that's built to exclude each row's *own* game from its own trailing
+    value (leakage prevention for training rows); a projected row has no
+    game of its own to leak, so the mean should include every real game
+    played so far, which is exactly what a shift(1) evaluated one row
+    past the last real game would produce anyway.
+
+    Opponent trailing (opponent_position_td_rate_allowed) is computed the
+    same way, but deliberately from `historical` alone rather than by
+    re-running the shift+expanding machinery over a defense-side skeleton:
+    that column is built via `.groupby(...).sum()` before trailing, and
+    `.sum()` over an all-NaN group returns 0 rather than NaN, which would
+    quietly inject a fake "0 TDs allowed" observation for every future
+    game if projected rows were mixed into that aggregation.
+    """
+    if historical.empty:
+        return historical.iloc[0:0]
 
     roster_cols = (
-        rosters[["player_id", "season", "team", "position"]]
+        rosters[["player_id", "season", "team", "position", "player_name"]]
         .dropna(subset=["player_id"])
         .drop_duplicates(subset=["player_id", "season"])
     )
-    player_game = player_game.merge(roster_cols, on=["player_id", "season"], how="left")
-    player_game["team"] = player_game["team"].fillna(player_game["posteam"])
-
-    # Opponent for each team-game, derived from pbp's own home/away columns
-    # rather than requiring a schedules argument.
-    game_teams = pbp[["game_id", "home_team", "away_team"]].drop_duplicates()
-    player_game = player_game.merge(game_teams, on="game_id", how="left")
-    player_game["opponent"] = np.where(
-        player_game["posteam"] == player_game["away_team"],
-        player_game["home_team"],
-        player_game["away_team"],
+    eligible = historical[["player_id", "season"]].drop_duplicates().merge(
+        roster_cols, on=["player_id", "season"], how="inner"
     )
-    player_game = player_game.drop(columns=["home_team", "away_team"])
+    if eligible.empty:
+        return historical.iloc[0:0]
 
-    allowed = (
-        player_game.groupby(["opponent", "position", "game_id", "week", "season"])["anytime_td"]
+    upcoming = schedules[schedules["home_score"].isna()]
+    home = upcoming[["game_id", "season", "week", "home_team", "away_team"]].rename(
+        columns={"home_team": "team", "away_team": "opponent"}
+    )
+    away = upcoming[["game_id", "season", "week", "home_team", "away_team"]].rename(
+        columns={"away_team": "team", "home_team": "opponent"}
+    )
+    team_schedule = pd.concat([home, away], ignore_index=True)
+
+    projected = eligible.merge(team_schedule, on=["team", "season"], how="inner")
+    if projected.empty:
+        return historical.iloc[0:0]
+    projected["posteam"] = projected["team"]
+
+    value_cols = ["touches", "redzone_touches", "target_share", "anytime_td"]
+    player_trailing_now = (
+        historical.groupby(["player_id", "season"])[value_cols]
+        .mean()
+        .add_suffix("_trailing")
+        .reset_index()
+    )
+    projected = projected.merge(player_trailing_now, on=["player_id", "season"], how="left")
+
+    defense_allowed_now = (
+        historical.groupby(["opponent", "position", "game_id", "season"])["anytime_td"]
         .sum()
         .rename("td_allowed")
         .reset_index()
-        .rename(columns={"opponent": "defteam"})
+        .groupby(["opponent", "position", "season"])["td_allowed"]
+        .mean()
+        .rename("opponent_position_td_rate_allowed_trailing")
+        .reset_index()
     )
-    allowed = _trailing_average(
-        allowed, group_cols=["defteam", "position", "season"], order_col="week", value_cols=["td_allowed"]
-    )
-    allowed = allowed.rename(columns={
-        "defteam": "opponent",
-        "td_allowed_trailing": "opponent_position_td_rate_allowed_trailing",
-    })
-    player_game = player_game.merge(
-        allowed[["opponent", "position", "week", "season", "opponent_position_td_rate_allowed_trailing"]],
-        on=["opponent", "position", "week", "season"],
-        how="left",
-    )
+    projected = projected.merge(defense_allowed_now, on=["opponent", "position", "season"], how="left")
 
-    value_cols = ["touches", "redzone_touches", "target_share", "anytime_td"]
-    player_game = _trailing_average(
-        player_game, group_cols=["player_id", "season"], order_col="week", value_cols=value_cols
-    )
+    for col in ["targets", "receptions", "touches", "redzone_touches", "team_targets", "target_share", "anytime_td"]:
+        projected[col] = np.nan
 
-    return player_game.drop(columns=["rush_touches", "rush_redzone_touches", "rec_redzone_touches"])
+    projected = projected[historical.columns]
+    # Match historical's float subtypes (e.g. float32 columns from pbp's
+    # own downcasting) -- an all-NaN float64 column concatenated against a
+    # float32 one triggers pandas' "empty/all-NA dtype inference" deprecation
+    # warning otherwise.
+    for col in historical.columns:
+        if pd.api.types.is_float_dtype(historical[col]) and historical[col].dtype != projected[col].dtype:
+            projected[col] = projected[col].astype(historical[col].dtype)
+
+    return projected
 
 
 def attach_odds_features(features: pd.DataFrame, odds: list[dict]) -> pd.DataFrame:

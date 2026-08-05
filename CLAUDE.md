@@ -150,18 +150,22 @@ markets into one feed:
 - Whether to pay for X API access for social signal, or skip it entirely.
 - **Resolved:** dashboard framework is Streamlit (`dashboard/app.py`),
   built and in use.
-- Prop models beyond winner/anytime-TD: not started. Per the plan, the
-  winner model was built and validated first. The anytime-TD model
-  itself exists (`src/models/td_model.py`) but isn't wired into
-  `predict_dag` yet — unlike the winner model, it needs a player-level
-  projection step (current roster + each player's latest trailing stats
-  + upcoming opponent) before it can predict an upcoming game, since
-  play-by-play only covers games already played.
+- **Resolved:** anytime-TD is wired into `predict_dag` — `build_player_td_features`
+  (`src/models/features.py`) takes an optional `schedules` argument and
+  projects one row per (player, upcoming game) for current-roster players
+  with real game history this season, giving each their trailing feature
+  values (touches, redzone touches, target share, TD rate, opponent's
+  trailing TD-rate-allowed to that position). Verified end-to-end against
+  real held-out 2025 data (weeks 11+ masked as "upcoming") rather than
+  synthetic fixtures, since 2026 has no completed games yet. Discord
+  alerting still covers the winner model only — whether TD edges are
+  worth their own channel, or folding into the existing predictions
+  channel, is still open.
+- Prop models beyond winner/anytime-TD: not started.
 - **Not live yet:** all 5 DAGs are registered but paused, and no
   Airflow scheduler runs continuously on the user's machine — everything
   built so far (newsletter, Discord delivery) has been verified via
   direct/manual invocation, not a real scheduled run. Revisit once the
   user wants this fully autonomous.
-- **Next up:** broadening news sources beyond the current ESPN/NFL.com
-  RSS feeds (e.g. beat writers), and iterating on newsletter and Discord
-  message formatting/content.
+- **Next up:** Discord rich embeds (still plain markdown text), or making
+  Airflow live.
