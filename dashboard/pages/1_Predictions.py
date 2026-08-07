@@ -9,6 +9,15 @@ Run with: streamlit run dashboard/app.py (this page shows up in the
 sidebar automatically -- Streamlit's multipage convention for anything
 under dashboard/pages/).
 """
+import sys
+from pathlib import Path
+
+# Same sys.path fix as dashboard/app.py -- streamlit only puts this
+# script's own directory (dashboard/pages/) on sys.path, not the repo
+# root, and pages run independently enough that app.py's fix can't be
+# relied on to have already applied.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import pandas as pd
 import streamlit as st
 

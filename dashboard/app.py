@@ -3,6 +3,16 @@ Streamlit dashboard for reviewing bet performance and CLV.
 
 Run with: streamlit run dashboard/app.py
 """
+import sys
+from pathlib import Path
+
+# `streamlit run` puts this script's own directory (dashboard/) on
+# sys.path, not the invoking cwd -- so `from src...` below fails with
+# ModuleNotFoundError unless the repo root is added explicitly. Same fix
+# as dags/*_dag.py's sys.path.insert for the analogous Airflow issue (see
+# dags/_env.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import pandas as pd
 import streamlit as st
 
