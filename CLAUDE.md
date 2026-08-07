@@ -113,10 +113,19 @@ markets into one feed:
   daily email already covers the full day's news; this channel is for
   what shouldn't wait until morning.
 - **Predictions** (`DISCORD_PREDICTIONS_WEBHOOK_URL`): posts the latest
-  run's top model edges when `predict_dag` completes. One channel for
-  now, covering the winner model only — a separate TD channel isn't
-  worth splitting out until the anytime-TD model is actually wired into
-  `predict_dag` (see Open Decisions) and there's real content to post.
+  run's top model edges when `predict_dag` completes, one embed per
+  market (winner, anytime-TD, first-TD) — folded into the same channel
+  rather than splitting TD out into its own, now that all three markets
+  produce real content.
+- **Rich embeds, not plain text**: both channels post a Discord embed
+  object (title, color, fields) via `send_discord_embed`
+  (`src/discord/send.py`), not a markdown-formatted `content` string —
+  news alerts use the newsletter's "Injury" red, predictions use the
+  matching market color (winner cyan, TD green), same palette as
+  `src/newsletter/render.py`'s `CATEGORY_COLORS`/`MARKET_BADGES`, so the
+  email and Discord channels read as one visual system. One embed per
+  alert with a field per item, rather than a message per item, so a
+  same-run batch reads as a single digest card.
 - Webhook-only (no persistent bot) — simplest option that fits the
   single-user, self-hosted philosophy. A bot (for on-demand queries like
   "what's my current CLV") is a possible future upgrade, not a v1 need.
@@ -209,10 +218,12 @@ markets into one feed:
   `predict_dag` (persists as `market="first_td"`) and the newsletter
   (`render.py`'s `first_td` badge was already pre-wired for this).
 - Prop models beyond winner/anytime-TD/first-TD: not started.
+- **Resolved:** Discord alerts (news + predictions) now post rich embeds
+  via `send_discord_embed`, not plain markdown text — see "Discord
+  Delivery" above.
 - **Not live yet:** all 5 DAGs are registered but paused, and no
   Airflow scheduler runs continuously on the user's machine — everything
   built so far (newsletter, Discord delivery) has been verified via
   direct/manual invocation, not a real scheduled run. Revisit once the
   user wants this fully autonomous.
-- **Next up:** Discord rich embeds (still plain markdown text), or making
-  Airflow live.
+- **Next up:** making Airflow live.

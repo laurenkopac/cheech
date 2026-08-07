@@ -6,7 +6,7 @@ file's docstring for why the split exists.
 import os
 
 from src.discord.content import format_predictions_alert
-from src.discord.send import send_discord_message
+from src.discord.send import send_discord_embed
 from src.models.train import (
     build_features,
     build_player_features,
@@ -19,6 +19,7 @@ from src.newsletter.content import get_latest_model_edges
 from src.tracking.db import get_engine, init_db
 
 CURRENT_SEASON = 2026
+MARKETS = ["winner", "anytime_td", "first_td"]
 
 
 def run_feature_build():
@@ -68,16 +69,20 @@ def run_predictions():
         n = persist_predictions(engine, first_td_predictions, market="first_td")
         print(f"Persisted {n} first-TD predictions")
 
-    # Discord alerting covers the winner model only for now -- see
-    # CLAUDE.md "Discord Delivery" on splitting out a TD channel once
-    # there's a reason to see TD edges faster than the daily newsletter.
-    edges = get_latest_model_edges(engine, market="winner")
+    # All three markets now post to the same predictions channel, one
+    # embed per market -- CLAUDE.md flagged a separate TD channel as not
+    # worth splitting out "until there's real content to post," which is
+    # now the case, but folding into the existing channel rather than
+    # provisioning a new one is the smaller change; revisit if the single
+    # channel gets noisy.
     webhook_url = os.environ.get("DISCORD_PREDICTIONS_WEBHOOK_URL")
-    if edges and webhook_url:
-        send_discord_message(format_predictions_alert(edges), webhook_url)
-        print(f"Posted {len(edges)} model edge(s) to Discord")
-    elif edges:
-        print(f"{len(edges)} model edge(s) found but DISCORD_PREDICTIONS_WEBHOOK_URL isn't set -- skipping")
+    for market in MARKETS:
+        edges = get_latest_model_edges(engine, market=market)
+        if edges and webhook_url:
+            send_discord_embed(format_predictions_alert(edges), webhook_url)
+            print(f"Posted {len(edges)} {market} model edge(s) to Discord")
+        elif edges:
+            print(f"{len(edges)} {market} model edge(s) found but DISCORD_PREDICTIONS_WEBHOOK_URL isn't set -- skipping")
 
 
 if __name__ == "__main__":
