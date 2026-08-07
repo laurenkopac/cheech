@@ -12,6 +12,7 @@ from src.models.train import (
     build_player_features,
     persist_predictions,
     train_and_predict_anytime_td,
+    train_and_predict_first_td,
     train_and_predict_winner,
 )
 from src.newsletter.content import get_latest_model_edges
@@ -59,6 +60,13 @@ def run_predictions():
     else:
         n = persist_predictions(engine, td_predictions, market="anytime_td")
         print(f"Persisted {n} anytime-TD predictions")
+
+    first_td_predictions = train_and_predict_first_td(player_features)
+    if first_td_predictions.empty:
+        print("No first-TD predictions generated (no completed games to train on yet, or no projected rows)")
+    else:
+        n = persist_predictions(engine, first_td_predictions, market="first_td")
+        print(f"Persisted {n} first-TD predictions")
 
     # Discord alerting covers the winner model only for now -- see
     # CLAUDE.md "Discord Delivery" on splitting out a TD channel once

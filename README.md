@@ -110,13 +110,16 @@ own channel via a separate webhook (`src/discord/`). See CLAUDE.md →
 **Not live yet** — see "Run Airflow" above. Everything so far has been
 verified via direct/manual invocation, not a running scheduler.
 
-Both the winner and anytime-TD models are wired into `generate_predictions`
-now — `build_player_td_features` projects one row per (player, upcoming
-game) for current-roster players with real game history this season (see
-its docstring). Verified end-to-end against real held-out 2025 data
-(weeks 11+ masked as "upcoming"); real 2026 predictions won't exist until
-completed games accumulate this season. Prop markets beyond
-winner/anytime-TD haven't been started.
+The winner, anytime-TD, and first-TD-scorer models are all wired into
+`generate_predictions` now — `build_player_td_features` projects one row
+per (player, upcoming game) for current-roster players with real game
+history this season (see its docstring). First-TD reuses anytime-TD's
+model/features but normalizes predicted probabilities to sum to 1 within
+each game, since only one player actually scores first. Verified
+end-to-end against real held-out 2025 data (weeks 11+ masked as
+"upcoming"); real 2026 predictions won't exist until completed games
+accumulate this season. Prop markets beyond winner/anytime-TD/first-TD
+haven't been started.
 
 See `sql/schema.sql` for the current schema (schedules, injuries,
 snap_counts, news_items, odds_snapshots, bets, predictions) and

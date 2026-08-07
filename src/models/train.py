@@ -205,6 +205,69 @@ def train_and_predict_anytime_td(player_features: pd.DataFrame) -> pd.DataFrame:
     return upcoming[["game_id", "subject", "predicted_probability", "feature_snapshot"]]
 
 
+def train_and_predict_first_td(player_features: pd.DataFrame) -> pd.DataFrame:
+    """
+    Trains XGBoost on real player-games (first_td not null) and predicts
+    on projected player-games in the single nearest upcoming week -- same
+    setup as train_and_predict_anytime_td, reusing the same generic
+    trainer (train_anytime_td_model isn't actually anytime-specific, just
+    a class-imbalance-aware XGBoost classifier) and the same feature
+    columns.
+
+    Unlike anytime_td, first_td is mutually exclusive within a game (see
+    build_player_td_features's docstring) -- raw independent classifier
+    probabilities aren't directly comparable as "who's most likely to
+    score first" across a game's slate, so this normalizes each game's
+    predicted probabilities to sum to 1 (plain proportional normalization:
+    p_i / sum(p_j for every j in that game_id)) before persisting. This is
+    a real simplification, not a rigorous multinomial/hazard model -- it
+    ignores scoring-order dynamics (e.g. a run-heavy team that drives
+    methodically for a late score vs. a quick-strike passing offense), and
+    just treats "propensity to score at all" as a reasonable proxy for
+    "propensity to score first, relative to this game's other players."
+    Good enough for a first version; the pre-normalization raw_probability
+    is kept in feature_snapshot for later inspection if this needs
+    revisiting once real 2026 outcomes exist to check it against.
+
+    Returns one row per projected player-game in the upcoming week:
+    game_id, subject ("Player Name (TEAM)"), predicted_probability,
+    feature_snapshot. Empty if there's no training data yet or no
+    projected rows to predict on.
+    """
+    matrix = pd.get_dummies(
+        player_features[PLAYER_FEATURE_COLS + PLAYER_CATEGORICAL_COLS],
+        columns=PLAYER_CATEGORICAL_COLS,
+    )
+
+    is_completed = player_features["first_td"].notna()
+    labels = player_features["first_td"].fillna(0).astype(int)
+
+    X_train, y_train = matrix[is_completed], labels[is_completed]
+    is_next_week = _next_upcoming_week_mask(player_features, is_completed)
+    X_predict = matrix[is_next_week]
+    if X_train.empty or X_predict.empty:
+        return pd.DataFrame(columns=["game_id", "subject", "predicted_probability", "feature_snapshot"])
+
+    model = train_anytime_td_model(X_train, y_train)
+    raw_probs = predict_anytime_td_probabilities(model, X_predict)
+
+    snapshots = json.loads(X_predict.to_json(orient="records"))
+    for snapshot, raw_prob in zip(snapshots, raw_probs.values):
+        snapshot["raw_probability"] = float(raw_prob)
+
+    upcoming = player_features.loc[is_next_week, ["game_id", "player_name", "team"]].copy()
+    upcoming["raw_probability"] = raw_probs.values
+    game_totals = upcoming.groupby("game_id")["raw_probability"].transform("sum")
+    upcoming["predicted_probability"] = upcoming["raw_probability"] / game_totals
+
+    subjects = upcoming["player_name"].fillna("Unknown player") + " (" + upcoming["team"].fillna("?") + ")"
+    upcoming = upcoming.assign(
+        subject=subjects.values,
+        feature_snapshot=[json.dumps(s) for s in snapshots],
+    )
+    return upcoming[["game_id", "subject", "predicted_probability", "feature_snapshot"]]
+
+
 def persist_predictions(engine, predictions: pd.DataFrame, market: str) -> int:
     """Append predictions as a new timestamped snapshot -- like
     odds_snapshots, never upserted over a prior run's predictions."""
@@ -253,3 +316,14 @@ if __name__ == "__main__":
               [["game_id", "subject", "predicted_probability"]].head(10))
     else:
         print("No anytime-TD predictions to persist (no completed games to train on yet, or no projected rows).")
+
+    first_td_predictions = train_and_predict_first_td(player_features)
+    print(f"Generated {len(first_td_predictions)} first-TD predictions")
+
+    if not first_td_predictions.empty:
+        n = persist_predictions(engine, first_td_predictions, market="first_td")
+        print(f"Upserted {n} first-TD prediction rows")
+        print(first_td_predictions.sort_values("predicted_probability", ascending=False)
+              [["game_id", "subject", "predicted_probability"]].head(10))
+    else:
+        print("No first-TD predictions to persist (no completed games to train on yet, or no projected rows).")
