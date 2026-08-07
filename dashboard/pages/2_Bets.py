@@ -16,6 +16,7 @@ Run via dashboard/app.py's st.navigation -- this file must NOT call
 st.set_page_config itself (already called once there).
 """
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # streamlit only puts this script's own directory (dashboard/pages/) on
@@ -26,8 +27,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dashboard.theme import BORDER, CHALK, CRITICAL, GOOD, INK, MUTED, PANEL_RAISED, SLATE, inject_base_css
-from src.tracking.bets import calculate_clv, calculate_profit, get_bets
+from dashboard.theme import BORDER, CHALK, CRITICAL, GOOD, INK, MUTED, PANEL, PANEL_RAISED, SLATE, inject_base_css
+from src.tracking.bets import calculate_clv, calculate_profit, get_bets, log_bet, set_closing_odds, set_outcome
 from src.tracking.db import get_engine
 
 inject_base_css()
@@ -73,6 +74,16 @@ st.markdown(
     .cp-pill-neutral {{ background: {MUTED}; color: {CHALK}; }}
     .cp-pill-open {{ background: transparent; border: 1px solid {BORDER}; color: {SLATE}; }}
     .cp-ticket-profit {{ font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 0.85rem; color: {CHALK}; }}
+
+    [data-testid="stExpander"] summary p {{
+        font-family: 'Inter', sans-serif !important; color: {CHALK} !important; font-size: 0.85rem !important;
+        text-transform: none !important; letter-spacing: normal !important;
+    }}
+    [data-testid="stForm"] {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px; }}
+    [data-testid="stWidgetLabel"] p {{
+        font-family: 'IBM Plex Mono', monospace; color: {SLATE}; font-size: 0.68rem;
+        text-transform: uppercase; letter-spacing: 0.08em;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -149,14 +160,75 @@ def _pnl_chart(settled: pd.DataFrame) -> alt.Chart:
     )
 
 
+def _log_bet_form(engine, expanded: bool):
+    with st.expander("+ Log a bet", expanded=expanded):
+        with st.form("log_bet_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            market = c1.text_input("Market", placeholder="winner, anytime_td, player_prop...")
+            selection = c2.text_input("Selection", placeholder="Chiefs -3.5")
+
+            c3, c4, c5 = st.columns(3)
+            odds = c3.number_input("Odds (American)", value=-110, step=5)
+            stake = c4.number_input("Stake ($)", value=100.0, min_value=0.01, step=1.0)
+            probability = c5.number_input(
+                "Model probability", value=None, min_value=0.0, max_value=1.0, step=0.01, placeholder="optional"
+            )
+
+            c6, c7 = st.columns(2)
+            placed_on = c6.date_input("Date placed", value=date.today())
+            notes = c7.text_input("Notes", placeholder="optional")
+
+            if st.form_submit_button("Log bet"):
+                if not market.strip() or not selection.strip():
+                    st.error("Market and selection are required.")
+                else:
+                    log_bet(
+                        engine,
+                        market=market.strip(),
+                        selection=selection.strip(),
+                        odds_at_placement=int(odds),
+                        stake=float(stake),
+                        model_predicted_probability=probability,
+                        notes=notes.strip() or None,
+                        date_placed=datetime.combine(placed_on, datetime.min.time(), tzinfo=timezone.utc).isoformat(),
+                    )
+                    st.toast(f"Logged: {selection}")
+                    st.rerun()
+
+
+def _settle_bet_form(engine, open_bets: pd.DataFrame):
+    if open_bets.empty:
+        return
+    with st.expander(f"Settle a bet ({len(open_bets)} open)"):
+        labels = {
+            row.bet_id: f"{row.selection} — {row.date_placed.strftime('%b %-d, %Y')}"
+            for row in open_bets.sort_values("date_placed", ascending=False).itertuples()
+        }
+        with st.form("settle_bet_form"):
+            bet_id = st.selectbox("Bet", options=list(labels.keys()), format_func=lambda i: labels[i])
+            c1, c2 = st.columns(2)
+            closing_odds = c1.number_input("Closing odds", value=None, step=5, placeholder="optional, for CLV")
+            outcome = c2.selectbox("Outcome", options=["Not yet decided", "win", "loss", "push"])
+
+            if st.form_submit_button("Save"):
+                if closing_odds is not None:
+                    set_closing_odds(engine, int(bet_id), int(closing_odds))
+                if outcome != "Not yet decided":
+                    set_outcome(engine, int(bet_id), outcome)
+                st.toast("Bet updated")
+                st.rerun()
+
+
 engine = get_engine()
 bets = pd.DataFrame(get_bets(engine))
 
 st.markdown('<div class="cp-title">Bets &amp; P&amp;L</div>', unsafe_allow_html=True)
 st.markdown('<div class="cp-subtitle">Ledger &amp; performance</div>', unsafe_allow_html=True)
 
+_log_bet_form(engine, expanded=bets.empty)
+
 if bets.empty:
-    st.info("No bets logged yet. Add rows to the `bets` table to see your record and P&L here.")
+    st.info("No bets logged yet -- log one above to see your record and P&L here.")
     st.stop()
 
 bets["date_placed"] = pd.to_datetime(bets["date_placed"])
@@ -215,5 +287,6 @@ else:
     st.altair_chart(_pnl_chart(settled), use_container_width=True)
 
 st.markdown('<div class="cp-section"><span class="cp-dot" style="background:{}"></span>Ledger</div>'.format(SLATE), unsafe_allow_html=True)
+_settle_bet_form(engine, bets[bets["outcome"].isna()])
 for _, row in bets.sort_values("date_placed", ascending=False).iterrows():
     st.markdown(_ticket_html(row), unsafe_allow_html=True)
