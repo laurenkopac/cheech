@@ -5,47 +5,34 @@ what the models currently think -- Discord stays for the faster-cadence
 "something new happened" nudge (CLAUDE.md), this page is for "what's the
 full current slate."
 
-Visual design is a dark "prediction terminal" register (stadium-at-night
-charcoal, tabular mono numerals) rather than Streamlit's default light
-theme -- see the field-position bar in `_winner_card_html` below, which
-renders win probability as a ball position on a 100-yard bar instead of a
-generic progress bar. Winner/TD accent colors still match the newsletter's
-CATEGORY_COLORS/MARKET_BADGES and Discord's MARKET_COLORS (brightened for
-a dark background), so this page reads as the same cross-channel system,
-just restyled for its own medium.
+Shares dashboard/theme.py's dark "sleek modern" surface/type system with
+the Bets & P&L page (see that module's docstring for why they're not
+independently duplicated), and adds one signature element on top: win
+probability rendered as a ball position on a 100-yard field bar instead
+of a generic progress bar (see `_winner_card_html`). Winner/TD accent
+colors still match the newsletter's CATEGORY_COLORS/MARKET_BADGES and
+Discord's MARKET_COLORS (brightened for a dark background), so this page
+reads as the same cross-channel system, just restyled for its own medium.
 
-Run with: streamlit run dashboard/app.py (this page shows up in the
-sidebar automatically -- Streamlit's multipage convention for anything
-under dashboard/pages/).
+Run via dashboard/app.py's st.navigation -- this file must NOT call
+st.set_page_config itself (already called once there).
 """
 import re
 import sys
 from pathlib import Path
 
-# Same sys.path fix as dashboard/app.py -- streamlit only puts this
-# script's own directory (dashboard/pages/) on sys.path, not the repo
-# root, and pages run independently enough that app.py's fix can't be
-# relied on to have already applied.
+# streamlit only puts this script's own directory (dashboard/pages/) on
+# sys.path, not the repo root -- needed for `from src...` below.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pandas as pd
 import streamlit as st
 
+from dashboard.theme import BORDER, CHALK, CYAN, GREEN, PANEL_RAISED, SLATE, inject_base_css
 from src.tracking.db import get_engine
 from src.tracking.predictions import MARKETS, get_current_week_label, get_latest_predictions
 
-st.set_page_config(page_title="Cheech — Predictions", layout="wide")
-
-# ---------------------------------------------------------------- tokens --
-INK = "#10171A"
-PANEL = "#1A2327"
-PANEL_RAISED = "#212B30"
-HAIRLINE = "#2C3A3F"
-CHALK = "#ECF2F1"
-SLATE = "#7E939A"
-CYAN = "#38D6DC"
-GREEN = "#34D399"
-AMBER = "#F2A93B"
+inject_base_css()
 
 MARKET_LABELS = {
     "winner": "Winner",
@@ -61,97 +48,39 @@ _SUBJECT_RE = re.compile(r"^(.*)\s\(([^)]+)\)$")
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-
-    [data-testid="stDecoration"] {{ display: none; }}
-    .stApp {{ background: {INK}; }}
-    [data-testid="stHeader"] {{ background: {INK}; }}
-    [data-testid="stHeader"] svg {{ fill: {SLATE}; }}
-    [data-testid="stToolbar"] {{ background: {INK}; }}
-    [data-testid="stSidebar"] {{ background: {PANEL}; border-right: 1px solid {HAIRLINE}; }}
-    [data-testid="stSidebar"] * {{ color: {SLATE} !important; }}
-    .block-container {{ padding-top: 3.5rem; max-width: 1100px; }}
-    /* Body font via inheritance only -- a blanket ".stApp span/div" rule
-       out-specifies Streamlit's own icon-font class (e.g. the expander's
-       arrow glyph), turning it into literal ligature text like
-       "keyboard_arrow_right" instead of an arrow. */
-    .stApp {{ font-family: 'IBM Plex Sans', sans-serif; }}
-
-    .cp-title {{
-        font-family: 'Anton', sans-serif; font-size: 2.6rem; letter-spacing: 0.02em;
-        color: {CHALK}; text-transform: uppercase; margin: 0; line-height: 1;
-    }}
-    .cp-subtitle {{
-        font-family: 'IBM Plex Mono', monospace; color: {SLATE}; letter-spacing: 0.14em;
-        font-size: 0.8rem; text-transform: uppercase; margin: 0.5rem 0 0 0;
-    }}
-    .cp-section {{
-        font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.2em; text-transform: uppercase;
-        font-size: 0.75rem; font-weight: 600; margin: 2.4rem 0 1rem 0; padding-bottom: 0.6rem;
-        border-bottom: 1px solid {HAIRLINE}; display: flex; align-items: center; gap: 0.6rem;
-    }}
-    .cp-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
-    .cp-empty {{
-        font-family: 'IBM Plex Mono', monospace; color: {SLATE}; font-size: 0.85rem;
-        padding: 0.6rem 0 1.2rem 0;
-    }}
-
-    .cp-card {{
-        background: {PANEL}; border: 1px solid {HAIRLINE}; border-radius: 6px;
-        padding: 1.1rem 1.4rem; margin-bottom: 0.75rem;
-    }}
-    .cp-card-head {{ display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.9rem; }}
+    .cp-card-head {{ display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1rem; }}
     .cp-matchup {{ font-weight: 600; color: {CHALK}; font-size: 0.95rem; }}
     .cp-at {{ color: {SLATE}; font-weight: 400; }}
     .cp-kickoff {{ font-family: 'IBM Plex Mono', monospace; color: {SLATE}; font-size: 0.72rem; letter-spacing: 0.08em; }}
 
     .cp-field {{ display: flex; align-items: center; }}
-    .cp-endzone {{ display: flex; flex-direction: column; align-items: center; width: 64px; flex-shrink: 0; }}
-    .cp-team {{ font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; font-size: 0.72rem; color: {SLATE}; letter-spacing: 0.04em; }}
-    .cp-pct {{ font-family: 'Anton', sans-serif; font-size: 1.5rem; color: {CHALK}; line-height: 1.15; }}
-    .cp-endzone-home {{ flex-direction: column-reverse; }}
+    .cp-endzone {{ display: flex; flex-direction: column; align-items: center; width: 64px; flex-shrink: 0; gap: 0.3rem; }}
+    .cp-team {{ font-family: 'Inter', sans-serif; font-weight: 600; font-size: 0.72rem; color: {SLATE}; letter-spacing: 0.04em; }}
+    .cp-pct {{ font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.35rem; color: {CHALK}; line-height: 1; }}
 
-    .cp-bar {{ position: relative; flex: 1; height: 6px; margin: 0 1.1rem; background: {HAIRLINE}; border-radius: 3px; }}
-    .cp-tick {{ position: absolute; top: -3px; width: 1px; height: 12px; background: rgba(236,242,241,0.16); }}
-    .cp-midfield {{ position: absolute; left: 50%; top: -5px; width: 1px; height: 16px; background: rgba(236,242,241,0.4); }}
+    .cp-bar {{ position: relative; flex: 1; height: 6px; margin: 0 1.2rem; background: {BORDER}; border-radius: 3px; }}
+    .cp-tick {{ position: absolute; top: -3px; width: 1px; height: 12px; background: rgba(244,246,248,0.10); }}
+    .cp-midfield {{ position: absolute; left: 50%; top: -5px; width: 1px; height: 16px; background: rgba(244,246,248,0.28); }}
     .cp-fill {{ position: absolute; top: 0; height: 6px; border-radius: 3px; }}
-    .cp-ball {{ position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%, -50%); }}
+    .cp-ball {{ position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; transform: translate(-50%, -50%); }}
 
     .cp-edge {{
-        font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.14em; color: {SLATE};
-        text-transform: uppercase; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid {HAIRLINE};
+        font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.12em; color: {SLATE};
+        text-transform: uppercase; margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid {BORDER};
     }}
     .cp-edge-value {{ color: {CHALK}; }}
 
-    .cp-game-label {{
-        font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; color: {CHALK}; font-size: 0.85rem;
-        margin: 1.2rem 0 0.5rem 0;
-    }}
-    .cp-table {{ border: 1px solid {HAIRLINE}; border-radius: 6px; overflow: hidden; }}
+    .cp-game-label {{ font-family: 'Inter', sans-serif; font-weight: 600; color: {CHALK}; font-size: 0.85rem; margin: 1.3rem 0 0.6rem 0; }}
+    .cp-table {{ border: 1px solid {BORDER}; border-radius: 12px; overflow: hidden; }}
     .cp-row {{
-        display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 1rem;
-        background: {PANEL}; border-bottom: 1px solid {HAIRLINE};
+        display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 1.1rem;
+        background: {PANEL_RAISED}; border-bottom: 1px solid {BORDER};
     }}
     .cp-row:last-child {{ border-bottom: none; }}
-    .cp-row-top {{ border-left: 3px solid var(--accent); padding-left: calc(1rem - 3px); }}
+    .cp-row-top {{ border-left: 3px solid var(--accent); padding-left: calc(1.1rem - 3px); }}
     .cp-player {{ color: {CHALK}; font-size: 0.85rem; }}
     .cp-player-team {{ color: {SLATE}; font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; margin-left: 0.4rem; }}
     .cp-prob {{ font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; color: {CHALK}; font-size: 0.85rem; }}
-
-    [data-testid="stButton"] button {{
-        background: {PANEL_RAISED}; color: {SLATE}; border: 1px solid {HAIRLINE}; border-radius: 4px;
-        font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.72rem;
-    }}
-    [data-testid="stButton"] button:hover {{ border-color: {CYAN}; color: {CYAN}; }}
-
-    [data-testid="stExpander"] {{ background: {PANEL}; border: 1px solid {HAIRLINE}; border-radius: 6px; margin-top: 0.4rem; }}
-    [data-testid="stExpander"] summary {{
-        font-family: 'IBM Plex Mono', monospace; color: {SLATE} !important; font-size: 0.72rem;
-        letter-spacing: 0.08em; text-transform: uppercase;
-    }}
-
-    [data-testid="stAlert"] {{ background: {PANEL}; border: 1px solid {HAIRLINE}; border-radius: 6px; }}
-    [data-testid="stAlert"] p {{ color: {SLATE} !important; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -200,9 +129,9 @@ def _winner_card_html(row) -> str:
           {ticks}
           <div class="cp-midfield"></div>
           <div class="cp-fill" style="left:{fill_left}%; width:{fill_width}%; background:{CYAN};"></div>
-          <div class="cp-ball" style="left:{ball_left:.1f}%; background:{CYAN}; box-shadow:0 0 0 4px rgba(56,214,220,0.18);"></div>
+          <div class="cp-ball" style="left:{ball_left:.1f}%; background:{CYAN}; box-shadow:0 0 0 5px rgba(76,217,232,0.16);"></div>
         </div>
-        <div class="cp-endzone cp-endzone-home"><span class="cp-team">{home}</span><span class="cp-pct">{home_pct:.1%}</span></div>
+        <div class="cp-endzone"><span class="cp-team">{home}</span><span class="cp-pct">{home_pct:.1%}</span></div>
       </div>
       <div class="cp-edge">Edge vs market <span class="cp-edge-value">{edge_label}</span></div>
     </div>
