@@ -1,0 +1,12 @@
+# Dark base theme matching dashboard/theme.py's palette -- gets native
+# widgets (form inputs, selects, date pickers, dataframes) themed
+# correctly for free, since those are BaseWeb components whose internals
+# aren't reliably reachable with hand-written CSS. dashboard/theme.py's
+# injected CSS layers the bespoke stuff (cards, tickets, field bars) on
+# top of this base rather than fighting it.
+[theme]
+base = "dark"
+backgroundColor = "#0A0E14"
+secondaryBackgroundColor = "#12161F"
+primaryColor = "#4CD9E8"
+textColor = "#F4F6F8"

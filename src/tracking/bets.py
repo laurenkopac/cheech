@@ -92,6 +92,18 @@ def calculate_clv(odds_at_placement: float, closing_odds: float) -> float:
     return _american_to_prob(closing_odds) - _american_to_prob(odds_at_placement)
 
 
+def calculate_profit(stake: float, odds: float, outcome: str) -> float:
+    """Net profit/loss in the bet's own currency units for a settled bet
+    (win/loss/push) at the odds actually taken -- American-odds payout
+    math, stake risked back out on a loss, stake neither won nor lost on
+    a push."""
+    if outcome == "push":
+        return 0.0
+    if outcome == "loss":
+        return -stake
+    return stake * (odds / 100) if odds > 0 else stake * (100 / abs(odds))
+
+
 def get_bets(engine, *, open_only: bool = False) -> list[dict]:
     """All logged bets, most recent first. `open_only` filters to bets
     without a recorded outcome yet."""
