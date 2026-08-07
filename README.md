@@ -103,8 +103,10 @@ plain-text fallback part.
 Discord delivery is also wired and verified end-to-end, as a
 faster-cadence complement to the daily email: `ingest_news` posts
 high-signal (injury/roster) news items as they're found, and
-`generate_predictions` posts the latest run's top edges — each to its
-own channel via a separate webhook (`src/discord/`). See CLAUDE.md →
+`generate_predictions` posts the latest run's top edges for all three
+markets (winner, anytime-TD, first-TD) — each content type to its own
+channel via a separate webhook (`src/discord/`), as rich embeds matching
+the newsletter's color palette, not plain text. See CLAUDE.md →
 "Discord Delivery" for the design.
 
 **Not live yet** — see "Run Airflow" above. Everything so far has been
