@@ -220,9 +220,29 @@ def build_player_td_features(
     One row per player per game with trailing pre-game features (target
     share, touches/game, red-zone touches/game, historical TD rate, and
     the opponent defense's trailing TD rate allowed to the player's
-    position). Also includes same-game context columns (touches,
-    targets, anytime_td) needed to derive labels downstream -- those are
+    position). Also includes same-game context columns (touches, targets,
+    anytime_td, first_td) needed to derive labels downstream -- those are
     NOT safe to use as model input, only the `*_trailing` columns are.
+
+    `first_td` is 1 for the one player_id (per game_id) credited with the
+    game's earliest touchdown by play order, 0 for every other player-game
+    row in that game -- correctly 0 for everyone in a game with zero
+    touchdowns, and (same scope limit anytime_td already has) also 0 for
+    everyone in the ~4% of games where the actual first score came off an
+    interception/fumble/kick return, since player_game is built entirely
+    from each play's own rusher_player_id/receiver_player_id, which on a
+    return touchdown identifies the offensive player who had the ball
+    *before* the turnover, not the defender who actually returned it and
+    scored -- so the real scorer is never one of the rows being labeled.
+    Verified against real 2025 data across all 12 such games this
+    season: in every one, td_player_id (the actual scorer) matched
+    neither that play's rusher_player_id nor receiver_player_id, cross-
+    checked directly against raw pbp. Unlike `anytime_td`, which is independent per player,
+    `first_td` is mutually exclusive within a game -- callers that want
+    genuinely comparable "who scores first" probabilities across a game's
+    slate need to normalize predicted probabilities within each game_id
+    (see train_and_predict_first_td), not just take the raw classifier
+    output the way anytime_td's probabilities are used directly.
 
     If `schedules` is given, also appends one projected row per (player,
     upcoming game) for every player with real game history this season on
@@ -270,7 +290,7 @@ def build_player_td_features(
     """
     HISTORICAL_COLS = [
         "player_id", "game_id", "posteam", "week", "season", "targets", "receptions",
-        "touches", "redzone_touches", "team_targets", "target_share", "anytime_td",
+        "touches", "redzone_touches", "team_targets", "target_share", "anytime_td", "first_td",
         "team", "position", "player_name", "opponent",
         "opponent_position_td_rate_allowed_trailing", "touches_trailing",
         "redzone_touches_trailing", "target_share_trailing", "anytime_td_trailing",
@@ -324,6 +344,27 @@ def build_player_td_features(
         )
         player_game = player_game.merge(td_flags, on=["player_id", "game_id"], how="left")
         player_game["anytime_td"] = player_game["anytime_td"].fillna(0).clip(upper=1).astype(int)
+
+        # first_td: the one player_id (per game_id) credited with the
+        # earliest touchdown by play order -- play_id is monotonically
+        # increasing within a game (confirmed against real data), a
+        # reliable ordering key without needing game_seconds_remaining's
+        # clock-stoppage quirks. Games with zero touchdowns correctly get
+        # first_td=0 for every player (first_td_scorer has no row for
+        # that game_id, so the merge leaves every row's own comparison
+        # False). Reuses `scoring_plays` from the anytime_td computation
+        # above -- same touchdown definition, just narrowed to the first
+        # one per game instead of counted per player.
+        first_td_scorer = (
+            scoring_plays.sort_values("play_id")
+            .groupby("game_id")
+            .first()["td_player_id"]
+            .rename("first_td_player_id")
+            .reset_index()
+        )
+        player_game = player_game.merge(first_td_scorer, on="game_id", how="left")
+        player_game["first_td"] = (player_game["player_id"] == player_game["first_td_player_id"]).astype(int)
+        player_game = player_game.drop(columns=["first_td_player_id"])
 
         roster_cols = (
             rosters[["player_id", "season", "team", "position", "player_name"]]
@@ -505,7 +546,10 @@ def _project_upcoming_player_rows(
         teammate_counts = _teammate_out_counts(_latest_injury_reports(injuries))
         projected = projected.merge(teammate_counts, on=["team", "position", "season"], how="left")
 
-    for col in ["targets", "receptions", "touches", "redzone_touches", "team_targets", "target_share", "anytime_td"]:
+    for col in [
+        "targets", "receptions", "touches", "redzone_touches", "team_targets",
+        "target_share", "anytime_td", "first_td",
+    ]:
         projected[col] = np.nan
 
     projected = projected[historical.columns]

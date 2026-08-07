@@ -187,7 +187,28 @@ markets into one feed:
   this up), so `team_implied_total` is still 0% populated for training
   rows in practice. Not a bug, just waiting on real accumulated history —
   same category as "not live yet" below.
-- Prop models beyond winner/anytime-TD: not started.
+- **Resolved:** first-TD-scorer is now a modeled market too, alongside
+  winner/anytime-TD — `build_player_td_features` computes a `first_td`
+  label (1 for the one player_id per game_id credited with the earliest
+  touchdown by play order, verified against real 2025 data including a
+  direct pbp cross-check). `train_and_predict_first_td`
+  (`src/models/train.py`) reuses the exact same trainer and feature
+  columns as anytime-TD, but first_td is mutually exclusive within a game
+  (only one real first scorer), so raw classifier probabilities aren't
+  directly comparable across a game's slate the way anytime-TD's are —
+  predictions are normalized to sum to 1 within each game_id (plain
+  proportional normalization, not a rigorous multinomial/hazard model;
+  ignores scoring-order dynamics like a run-heavy team driving methodically
+  vs. a quick-strike passing offense — a real v1 simplification, worth
+  revisiting once real 2026 outcomes exist to check it against). ~4% of
+  real games have their true first score come off an interception/
+  fumble/kick return, which player_game never tracks (same scope limit
+  anytime-TD already has for non-offensive scores) — those games correctly
+  get `first_td=0` for every tracked player, verified this is exactly
+  what happens in all 12 such games in the real 2025 season. Wired into
+  `predict_dag` (persists as `market="first_td"`) and the newsletter
+  (`render.py`'s `first_td` badge was already pre-wired for this).
+- Prop models beyond winner/anytime-TD/first-TD: not started.
 - **Not live yet:** all 5 DAGs are registered but paused, and no
   Airflow scheduler runs continuously on the user's machine — everything
   built so far (newsletter, Discord delivery) has been verified via

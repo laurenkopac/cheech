@@ -1,8 +1,14 @@
 """
-Anytime-TD / TD-prop prediction: per-player rate model.
+TD-prop prediction: per-player rate model.
 
 Modeled separately from the winner model since it's a player-level,
-imbalanced-outcome problem (most player-games have zero TDs).
+imbalanced-outcome problem (most player-games have zero TDs). Despite the
+"anytime_td" naming, these are generic class-imbalance-aware XGBoost
+wrappers with nothing anytime-specific in them -- src/models/train.py
+reuses them for first_td too (see train_and_predict_first_td), which
+needs a different label and a different post-processing step
+(within-game normalization, since first_td is mutually exclusive per
+game) but the exact same train/predict mechanics.
 """
 import pandas as pd
 from xgboost import XGBClassifier
